@@ -142,7 +142,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 class EagerPCMAudio(discord.AudioSource):
     def __init__(self, source):
         self.initialized = False
-        self.max_chunk_count = 128
+        self.max_chunk_count = 256
         self.preload_chunk_count = 128
         self.backoff_sec = 1.0
         self.source = source
@@ -162,19 +162,11 @@ class EagerPCMAudio(discord.AudioSource):
         if self.initialized:
             return
 
-        for _ in range(self.preload_chunk_count):
-            data = self.source.read()
-            if len(data) == 0:
-                self.source = None
-                self.chunk_sem.release()
-                print("[ ] EagerPCMAudio source done")
-                break
-            with self.access_sem:
-                self.chunks.append(data)
-            self.chunk_sem.release()
-
         self.fetcher_thread = threading.Thread(target=self.fetcher_main)
         self.fetcher_thread.start()
+
+        self.chunk_sem.acquire()
+        self.chunk_sem.release()
 
         self.initialized = True
 
@@ -193,12 +185,18 @@ class EagerPCMAudio(discord.AudioSource):
         return b""
 
     def fetcher_main(self):
+        chunks_pending = 0
         while True:
             if self.close_event.is_set():
                 print("[ ] EagerPCMAudio fetecher stopped, close event")
                 break
             with self.access_sem:
                 l = len(self.chunks)
+
+            if l >= self.preload_chunk_count:
+                chunks_pending -= 1
+                self.chunk_sem.release()
+
             if l >= self.max_chunk_count:
                 time.sleep(self.backoff_sec)
                 with self.access_sem:
@@ -213,12 +211,12 @@ class EagerPCMAudio(discord.AudioSource):
             data = self.source.read()
             if len(data) == 0:
                 self.source = None
-                self.chunk_sem.release()
+                self.chunk_sem.release(chunks_pending + 1)
                 print("[ ] EagerPCMAudio fetecher stopped, finished")
                 break
             with self.access_sem:
                 self.chunks.append(data)
-            self.chunk_sem.release()
+                chunks_pending += 1
 
     def cleanup(self):
         print("[ ] EagerPCMAudio cleanup")
