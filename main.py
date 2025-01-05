@@ -100,11 +100,12 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
-    def add(self, url: str) -> None:
+    async def add(self, url: str) -> None:
         print(f"[ ] adding {url} to queue")
         self.queue.append(LazyAudioSource(url))
         if len(self.queue) == 2:
-            self.queue[1].prefetch()
+            e = self.queue[1]
+            await asyncio.to_thread(e.prefetch)
 
     def clear(self) -> None:
         print("[ ] clearing queue")
@@ -261,7 +262,7 @@ class Audio(discord.ext.commands.Cog):
             self.queue = YTDLQueuedStreamAudio()
         queue = self.queue
 
-        await asyncio.to_thread(lambda: queue.add(url))
+        await queue.add(url)
         if self.is_playing:
             return
         print("[ ] voice client not playing, starting")
