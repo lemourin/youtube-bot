@@ -142,15 +142,15 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 class EagerPCMAudio(discord.AudioSource):
     def __init__(self, source):
         self.initialized = False
+        self.done = False
         self.max_chunk_count = 256
         self.preload_chunk_count = 128
-        self.backoff_sec = 1.0
         self.source = source
         self.chunks = []
         self.access_sem = threading.Semaphore()
         self.chunk_sem = threading.Semaphore(value=0)
-        self.fetcher_thread = None
-        self.close_event = threading.Event()
+        self.cv = threading.Condition(self.access_sem)
+        self.fetcher_thread = threading.Thread(target=self.fetcher_main)
 
     def drain(self):
         pass
@@ -162,7 +162,6 @@ class EagerPCMAudio(discord.AudioSource):
         if self.initialized:
             return
 
-        self.fetcher_thread = threading.Thread(target=self.fetcher_main)
         self.fetcher_thread.start()
 
         self.chunk_sem.acquire()
@@ -180,6 +179,8 @@ class EagerPCMAudio(discord.AudioSource):
             else:
                 c = self.chunks[0]
                 self.chunks = self.chunks[1:]
+                if len(self.chunks) == self.max_chunk_count - 1:
+                    self.cv.notify()
                 return c
         self.chunk_sem.release()
         return b""
@@ -187,42 +188,34 @@ class EagerPCMAudio(discord.AudioSource):
     def fetcher_main(self):
         chunks_pending = 0
         while True:
-            if self.close_event.is_set():
-                print("[ ] EagerPCMAudio fetecher stopped, close event")
-                break
             with self.access_sem:
-                l = len(self.chunks)
+                self.cv.wait_for(
+                    lambda: len(self.chunks) < self.max_chunk_count or self.done
+                )
+                if self.done:
+                    print("[ ] EagerPCMAudio fetcher stopped, close event")
+                    self.chunk_sem.release(chunks_pending + 1)
+                    break
+                if len(self.chunks) >= self.preload_chunk_count:
+                    chunks_pending -= 1
+                    self.chunk_sem.release()
 
-            if l >= self.preload_chunk_count:
-                chunks_pending -= 1
-                self.chunk_sem.release()
-
-            if l >= self.max_chunk_count:
-                time.sleep(self.backoff_sec)
-                with self.access_sem:
-                    l = len(self.chunks)
-                if l < 8:
-                    print(f"[!] fetcher has only {l} chunks ready")
-                continue
-
-            if self.source is None:
-                print("[ ] EagerPCMAudio fetecher stopped, source empty")
-                break
             data = self.source.read()
             if len(data) == 0:
-                self.source = None
                 self.chunk_sem.release(chunks_pending + 1)
-                print("[ ] EagerPCMAudio fetecher stopped, finished")
+                print("[ ] EagerPCMAudio fetcher stopped, finished")
                 break
             with self.access_sem:
                 self.chunks.append(data)
-                chunks_pending += 1
+            chunks_pending += 1
 
     def cleanup(self):
         print("[ ] EagerPCMAudio cleanup")
         if not self.initialized:
             return
-        self.close_event.set()
+        with self.access_sem:
+            self.done = True
+            self.cv.notify()
         self.fetcher_thread.join()
 
 
