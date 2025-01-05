@@ -189,6 +189,15 @@ class BufferedAudioSource(discord.AudioSource):
                 self.cv.notify()
             return c
 
+    def cleanup(self) -> None:
+        print("[ ] BufferedAudioSource cleanup")
+        if not self.future:
+            return
+        with self.access_sem:
+            self.done = True
+            self.cv.notify()
+        self.future.result()
+
     def __fetcher_task(self) -> None:
         chunks_pending = 0
         while True:
@@ -212,15 +221,6 @@ class BufferedAudioSource(discord.AudioSource):
             with self.access_sem:
                 self.chunks.append(data)
             chunks_pending += 1
-
-    def cleanup(self) -> None:
-        print("[ ] BufferedAudioSource cleanup")
-        if not self.future:
-            return
-        with self.access_sem:
-            self.done = True
-            self.cv.notify()
-        self.future.result()
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
