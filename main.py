@@ -113,14 +113,15 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         for a in trash:
             a.cleanup()
 
-    def skip(self) -> None:
+    async def skip(self) -> None:
         if not self.queue:
             return
         a = self.queue[0]
         self.queue = self.queue[1:]
 
         if len(self.queue) > 1:
-            self.queue[1].prefetch()
+            e = self.queue[1]
+            await asyncio.to_thread(e.prefetch)
         a.cleanup()
 
     def read(self) -> bytes:
@@ -300,7 +301,7 @@ class Audio(discord.ext.commands.Cog):
             self.source.buffered_audio.drain()
         queue = self.queue
         if queue is not None:
-            await asyncio.to_thread(queue.skip)
+            await queue.skip()
 
     @discord.ext.commands.command()
     async def volume(self, ctx: discord.ext.commands.Context, volume: int) -> None:
