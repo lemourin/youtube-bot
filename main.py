@@ -1,28 +1,31 @@
-import discord
-import discord.ext.commands
+# flake8: noqa: E501
+# pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring
+
 import asyncio
-import time
 import subprocess
 import threading
+from typing import cast
 import os
-from dotenv import load_dotenv
+import io
 import sys
 import aiohttp
+import discord
+import discord.ext.commands
+from dotenv import load_dotenv
 
 load_dotenv()
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
 HEALTHCHECK_ADDRESS = os.environ["HEALTHCHECK_ADDRESS"]
-# AUDIO_BITRATE = 128
-AUDIO_BITRATE = 512
+AUDIO_BITRATE = 320
 
 
-class YTDLBuffer:
+class YTDLBuffer(io.BufferedIOBase):
     def __init__(self, url: str) -> None:
         self.initialized = False
         self.url = url
-        self.proc = None
+        self.proc: subprocess.Popen[bytes] | None = None
 
     def __ensure_initialized(self) -> None:
         if self.initialized:
@@ -50,10 +53,11 @@ class YTDLBuffer:
         )
         self.initialized = True
 
-    def read(self, n: int) -> bytes:
+    def read(self, n: int | None = None) -> bytes:
         # print("[ ] YTDLBuffer read")
         self.__ensure_initialized()
-        return self.proc.stdout.read(n)
+        assert self.proc is not None and self.proc.stdout is not None
+        return self.proc.stdout.read(-1 if n is None else n)
 
     def cleanup(self) -> None:
         print("[ ] YTDLBuffer cleanup")
@@ -79,7 +83,7 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
 class YTDLQueuedStreamAudio(discord.AudioSource):
     def __init__(self) -> None:
         super().__init__()
-        self.queue = []
+        self.queue: list[str | YTDLStreamAudio] = []
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
@@ -87,23 +91,23 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         print(f"[ ] adding {url} to queue")
         self.queue.append(url)
         if len(self.queue) == 2:
-            self.queue[1] = YTDLStreamAudio(self.queue[1])
+            self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
 
     def clear(self) -> None:
         print("[ ] clearing queue")
         trash = self.queue
         self.queue = []
         for a in trash:
-            a.cleanup()
+            cast(YTDLStreamAudio, a).cleanup()
 
     def skip(self) -> None:
         if not self.queue:
             return
-        a = self.queue[0]
+        a = cast(YTDLStreamAudio, self.queue[0])
         self.queue = self.queue[1:]
 
         if len(self.queue) > 1:
-            self.queue[1] = YTDLStreamAudio(self.queue[1])
+            self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
         a.cleanup()
 
     def read(self) -> bytes:
@@ -112,9 +116,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         if not self.queue:
             print("[ ] queue empty")
             return b""
-        if type(self.queue[0]) is str:
+        if isinstance(self.queue[0], str):
             self.queue[0] = YTDLStreamAudio(self.queue[0])
-        c = self.queue[0].read()
+        c = cast(YTDLStreamAudio, self.queue[0]).read()
         # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
         if len(c) < self.read_size:
             if len(self.queue) > 1:
@@ -123,9 +127,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             print("[ ] advancing queue")
             self.queue = self.queue[1:]
             if len(self.queue) > 1:
-                self.queue[1] = YTDLStreamAudio(self.queue[1])
+                self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
         if trash is not None:
-            trash.cleanup()
+            cast(YTDLStreamAudio, trash).cleanup()
         return c
 
     def is_opus(self) -> bool:
@@ -136,7 +140,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         trash = self.queue
         self.queue = []
         for a in trash:
-            a.cleanup()
+            cast(YTDLStreamAudio, a).cleanup()
 
 
 class BufferedAudioSource(discord.AudioSource):
@@ -146,8 +150,8 @@ class BufferedAudioSource(discord.AudioSource):
         self.max_chunk_count = 256
         self.preload_chunk_count = 128
         self.source = source
-        self.chunks = []
-        self.access_sem = threading.Semaphore()
+        self.chunks: list[bytes] = []
+        self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
         self.fetcher_thread = threading.Thread(target=self.__fetcher_main)
@@ -164,8 +168,8 @@ class BufferedAudioSource(discord.AudioSource):
         self.fetcher_thread.start()
         self.initialized = True
 
-        self.chunk_sem.acquire()
-        self.chunk_sem.release()
+        with self.chunk_sem:
+            pass
 
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
@@ -176,12 +180,11 @@ class BufferedAudioSource(discord.AudioSource):
                 print("[ ] BufferedAudioSource finished")
                 self.chunk_sem.release()
                 return b""
-            else:
-                c = self.chunks[0]
-                self.chunks = self.chunks[1:]
-                if len(self.chunks) == self.max_chunk_count - 1:
-                    self.cv.notify()
-                return c
+            c = self.chunks[0]
+            self.chunks = self.chunks[1:]
+            if len(self.chunks) == self.max_chunk_count - 1:
+                self.cv.notify()
+            return c
 
     def __fetcher_main(self) -> None:
         chunks_pending = 0
@@ -230,20 +233,24 @@ class YTDLSource(discord.PCMVolumeTransformer):
 class Audio(discord.ext.commands.Cog):
     def __init__(self, bot: discord.ext.commands.Bot) -> None:
         self.bot = bot
-        self.queue = None
-        self.source = None
-
+        self.queue: YTDLQueuedStreamAudio | None = None
+        self.source: YTDLSource | None = None
         self.is_playing = False
-
-        self.volume = 0.1
+        self._volume = 0.1
 
     @discord.ext.commands.command()
     async def join(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] join")
+        author = cast(discord.Member, ctx.author)
+        if author.voice is None:
+            return
         if ctx.voice_client is not None:
-            return await ctx.voice_client.move_to(ctx.author.voice.channel)
+            return await cast(discord.VoiceClient, ctx.voice_client).move_to(
+                author.voice.channel
+            )
 
-        await ctx.author.voice.channel.connect()
+        if author.voice.channel is not None:
+            await author.voice.channel.connect()
 
     @discord.ext.commands.command()
     async def yt(self, ctx: discord.ext.commands.Context, *, url: str) -> None:
@@ -255,17 +262,17 @@ class Audio(discord.ext.commands.Cog):
             print("[ ] voice client not playing, starting")
             self.is_playing = True
             async with ctx.typing():
-                self.source = YTDLSource(self.queue, self.volume)
+                self.source = YTDLSource(self.queue, self._volume)
                 self.source.prefetch()
 
             def finalizer(self, err):
                 if err:
                     print(f"[!] player error: {err}")
                 else:
-                    print(f"[ ] finished playing")
+                    print("[ ] finished playing")
                     self.is_playing = False
 
-            ctx.voice_client.play(
+            cast(discord.VoiceClient, ctx.voice_client).play(
                 self.source,
                 signal_type="music",
                 bitrate=AUDIO_BITRATE,
@@ -278,29 +285,29 @@ class Audio(discord.ext.commands.Cog):
             print("[ ] play started")
 
     @discord.ext.commands.command()
-    async def skip(self, ctx: discord.ext.commands.Context) -> None:
-        print(f"[ ] skip")
-        self.source.buffered_audio.drain()
+    async def skip(self, _ctx: discord.ext.commands.Context) -> None:
+        print("[ ] skip")
+        if self.source and self.source.buffered_audio:
+            self.source.buffered_audio.drain()
         if self.queue is not None:
             self.queue.skip()
 
     @discord.ext.commands.command()
     async def volume(self, ctx: discord.ext.commands.Context, volume: int) -> None:
         print(f"[ ] volume {volume}")
-        if volume < 0:
-            volume = 0
-        if volume > 200:
-            volume = 200
+        volume = max(min(volume, 200), 0)
+        voice_client = cast(discord.VoiceClient, ctx.voice_client)
 
-        self.volume = volume / 100
-        ctx.voice_client.source.volume = self.volume
+        self._volume = volume / 100
+        cast(YTDLSource, voice_client.source).volume = self._volume
         await ctx.send(f"volume set to {volume}%")
 
     @discord.ext.commands.command()
     async def stop(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] stop")
-        if ctx.voice_client.source is not None:
-            ctx.voice_client.stop()
+        voice_client = cast(discord.VoiceClient, ctx.voice_client)
+        if voice_client.source is not None:
+            voice_client.stop()
         if self.source is not None:
             self.source.cleanup()
             self.source = None
@@ -312,7 +319,7 @@ class Audio(discord.ext.commands.Cog):
     async def leave(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] leave")
         if ctx.voice_client is not None:
-            await ctx.voice_client.disconnect()
+            await ctx.voice_client.disconnect(force=False)
         if self.source is not None:
             self.source.cleanup()
             self.source = None
@@ -322,21 +329,22 @@ class Audio(discord.ext.commands.Cog):
             self.queue = None
 
     @discord.ext.commands.command()
-    async def die(self, ctx: discord.ext.commands.Context) -> None:
+    async def die(self, _ctx: discord.ext.commands.Context) -> None:
         print("[ ] die")
         sys.exit(0)
 
     @discord.ext.commands.command()
     async def ping(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] ping")
-        await ctx.send(f"pong")
+        await ctx.send("pong")
 
     @yt.before_invoke
     @join.before_invoke
     async def ensure_voice(self, ctx: discord.ext.commands.Context) -> None:
+        author = cast(discord.Member, ctx.author)
         if ctx.voice_client is None:
-            if ctx.author.voice:
-                await ctx.author.voice.channel.connect()
+            if author.voice and author.voice.channel:
+                await author.voice.channel.connect()
             else:
                 await ctx.send("no voice channel, dumbass")
                 raise discord.ext.commands.CommandError(
@@ -363,34 +371,6 @@ class Audio(discord.ext.commands.Cog):
             raise discord.ext.commands.CommandError("not authorirized")
 
 
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = discord.ext.commands.Bot(
-    command_prefix=discord.ext.commands.when_mentioned_or("!"),
-    intents=intents,
-)
-
-
-@bot.event
-async def on_ready() -> None:
-    print(f"[ ] logged in {bot.user} {bot.user.id}")
-
-
-@bot.event
-async def on_voice_state_update(
-    member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
-) -> None:
-    if before.channel is None:
-        return
-    if len(before.channel.members) != 1:
-        return
-    bot_member = before.channel.members[0]
-    if bot_member.id != bot.user.id:
-        return
-    await bot_member.guild.voice_client.disconnect(force=True)
-
-
 async def healthcheck() -> None:
     if len(HEALTHCHECK_ADDRESS) == 0:
         return
@@ -399,12 +379,40 @@ async def healthcheck() -> None:
             try:
                 async with session.get(HEALTHCHECK_ADDRESS) as response:
                     await response.text()
-            except e:
+            except aiohttp.web_exceptions.HTTPException as e:
                 print(f"[ ] health check error {e}")
             await asyncio.sleep(60)
 
 
 async def main() -> None:
+    intents = discord.Intents.default()
+    intents.message_content = True
+
+    bot = discord.ext.commands.Bot(
+        command_prefix=discord.ext.commands.when_mentioned_or("!"),
+        intents=intents,
+    )
+
+    @bot.event
+    async def on_ready() -> None:
+        assert bot.user is not None
+        print(f"[ ] logged in {bot.user} {bot.user.id}")
+
+    @bot.event
+    async def on_voice_state_update(
+        _member: discord.Member, before: discord.VoiceState, _after: discord.VoiceState
+    ) -> None:
+        if before.channel is None:
+            return
+        if len(before.channel.members) != 1:
+            return
+        assert bot.user is not None
+        bot_member = before.channel.members[0]
+        if bot_member.id != bot.user.id:
+            return
+        if bot_member.guild.voice_client is not None:
+            await bot_member.guild.voice_client.disconnect(force=True)
+
     async with bot:
         await bot.add_cog(Audio(bot))
         await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
