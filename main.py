@@ -245,15 +245,8 @@ class Audio(discord.ext.commands.Cog):
     async def join(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] join")
         author = cast(discord.Member, ctx.author)
-        if author.voice is None:
-            return
-        if ctx.voice_client is not None:
-            return await cast(discord.VoiceClient, ctx.voice_client).move_to(
-                author.voice.channel
-            )
-
-        if author.voice.channel is not None:
-            await author.voice.channel.connect()
+        assert author.voice is not None
+        await cast(discord.VoiceClient, ctx.voice_client).move_to(author.voice.channel)
 
     @discord.ext.commands.command()
     async def yt(self, ctx: discord.ext.commands.Context, *, url: str) -> None:
