@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # flake8: noqa: E501
 # pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring
 
@@ -80,34 +81,53 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
         super().cleanup()
 
 
+class LazyAudioSource(discord.AudioSource):
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.source: discord.AudioSource | None = None
+
+    def prefetch(self) -> None:
+        if self.source is None:
+            self.source = YTDLStreamAudio(self.url)
+
+    def cleanup(self) -> None:
+        if self.source:
+            self.source.cleanup()
+
+    def read(self) -> bytes:
+        self.prefetch()
+        assert self.source
+        return self.source.read()
+
+
 class YTDLQueuedStreamAudio(discord.AudioSource):
     def __init__(self) -> None:
         super().__init__()
-        self.queue: list[str | YTDLStreamAudio] = []
+        self.queue: list[LazyAudioSource] = []
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
     def add(self, url: str) -> None:
         print(f"[ ] adding {url} to queue")
-        self.queue.append(url)
+        self.queue.append(LazyAudioSource(url))
         if len(self.queue) == 2:
-            self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
+            self.queue[1].prefetch()
 
     def clear(self) -> None:
         print("[ ] clearing queue")
         trash = self.queue
         self.queue = []
         for a in trash:
-            cast(YTDLStreamAudio, a).cleanup()
+            a.cleanup()
 
     def skip(self) -> None:
         if not self.queue:
             return
-        a = cast(YTDLStreamAudio, self.queue[0])
+        a = self.queue[0]
         self.queue = self.queue[1:]
 
         if len(self.queue) > 1:
-            self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
+            self.queue[1].prefetch()
         a.cleanup()
 
     def read(self) -> bytes:
@@ -116,9 +136,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         if not self.queue:
             print("[ ] queue empty")
             return b""
-        if isinstance(self.queue[0], str):
-            self.queue[0] = YTDLStreamAudio(self.queue[0])
-        c = cast(YTDLStreamAudio, self.queue[0]).read()
+        c = self.queue[0].read()
         # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
         if len(c) < self.read_size:
             if len(self.queue) > 1:
@@ -127,9 +145,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             print("[ ] advancing queue")
             self.queue = self.queue[1:]
             if len(self.queue) > 1:
-                self.queue[1] = YTDLStreamAudio(cast(str, self.queue[1]))
+                self.queue[1].prefetch()
         if trash is not None:
-            cast(YTDLStreamAudio, trash).cleanup()
+            trash.cleanup()
         return c
 
     def is_opus(self) -> bool:
