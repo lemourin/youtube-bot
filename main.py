@@ -15,7 +15,8 @@ import discord
 import discord.ext.commands
 from dotenv import load_dotenv
 
-load_dotenv()
+ENV_FILE = os.environ["ENV_FILE"]
+load_dotenv(dotenv_path=ENV_FILE if ENV_FILE else None)
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
