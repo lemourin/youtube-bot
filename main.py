@@ -139,7 +139,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             a.cleanup()
 
 
-class EagerPCMAudio(discord.AudioSource):
+class BufferedAudioSource(discord.AudioSource):
     def __init__(self, source: discord.AudioSource) -> None:
         self.initialized = False
         self.done = False
@@ -155,7 +155,6 @@ class EagerPCMAudio(discord.AudioSource):
     def drain(self) -> None:
         with self.access_sem:
             self.chunks.clear()
-            self.done = True
             self.cv.notify()
 
     def ensure_initialized(self) -> None:
@@ -169,12 +168,12 @@ class EagerPCMAudio(discord.AudioSource):
         self.chunk_sem.release()
 
     def read(self) -> bytes:
-        # print("[ ] EagerPCMAudio read")
+        # print("[ ] BufferedAudioSource read")
         self.ensure_initialized()
         self.chunk_sem.acquire()
         with self.access_sem:
             if not self.chunks:
-                print("[ ] EagerPCMAudio finished")
+                print("[ ] BufferedAudioSource finished")
                 self.chunk_sem.release()
                 return b""
             else:
@@ -192,7 +191,7 @@ class EagerPCMAudio(discord.AudioSource):
                     lambda: len(self.chunks) < self.max_chunk_count or self.done
                 )
                 if self.done:
-                    print("[ ] EagerPCMAudio fetcher stopped, close event")
+                    print("[ ] BufferedAudioSource fetcher stopped, close event")
                     self.chunk_sem.release(chunks_pending + 1)
                     break
                 if len(self.chunks) >= self.preload_chunk_count:
@@ -202,14 +201,14 @@ class EagerPCMAudio(discord.AudioSource):
             data = self.source.read()
             if len(data) == 0:
                 self.chunk_sem.release(chunks_pending + 1)
-                print("[ ] EagerPCMAudio fetcher stopped, finished")
+                print("[ ] BufferedAudioSource fetcher stopped, finished")
                 break
             with self.access_sem:
                 self.chunks.append(data)
             chunks_pending += 1
 
     def cleanup(self) -> None:
-        print("[ ] EagerPCMAudio cleanup")
+        print("[ ] BufferedAudioSource cleanup")
         if not self.initialized:
             return
         with self.access_sem:
@@ -221,11 +220,11 @@ class EagerPCMAudio(discord.AudioSource):
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, queue: discord.AudioSource, volume: float) -> None:
         self.queue = queue
-        self.eager_audio = EagerPCMAudio(queue)
-        super().__init__(self.eager_audio, volume)
+        self.buffered_audio = BufferedAudioSource(queue)
+        super().__init__(self.buffered_audio, volume)
 
     def prefetch(self) -> None:
-        self.eager_audio.ensure_initialized()
+        self.buffered_audio.ensure_initialized()
 
 
 class Audio(discord.ext.commands.Cog):
@@ -281,7 +280,7 @@ class Audio(discord.ext.commands.Cog):
     @discord.ext.commands.command()
     async def skip(self, ctx: discord.ext.commands.Context) -> None:
         print(f"[ ] skip")
-        self.source.eager_audio.drain()
+        self.source.buffered_audio.drain()
         if self.queue is not None:
             self.queue.skip()
 
