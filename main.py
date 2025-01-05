@@ -15,10 +15,10 @@ import discord
 import discord.ext.commands
 from dotenv import load_dotenv
 
-ENV_FILE = os.environ["ENV_FILE"]
-load_dotenv(dotenv_path=ENV_FILE if ENV_FILE else None)
+load_dotenv(dotenv_path=os.environ["ENV_FILE"] if "ENV_FILE" in os.environ else None)
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+DISCORD_BOT_COMMAND_PREFIX = os.environ.get("DISCORD_BOT_COMMAND_PREFIX", "!")
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
 HEALTHCHECK_ADDRESS = os.environ["HEALTHCHECK_ADDRESS"]
 AUDIO_BITRATE = 320
@@ -395,7 +395,9 @@ async def main() -> None:
     intents.message_content = True
 
     bot = discord.ext.commands.Bot(
-        command_prefix=discord.ext.commands.when_mentioned_or("!"),
+        command_prefix=discord.ext.commands.when_mentioned_or(
+            DISCORD_BOT_COMMAND_PREFIX
+        ),
         intents=intents,
     )
 
