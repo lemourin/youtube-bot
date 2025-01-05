@@ -9,6 +9,7 @@ from typing import cast
 import os
 import io
 import sys
+from concurrent.futures import Executor, ThreadPoolExecutor
 import aiohttp
 import discord
 import discord.ext.commands
@@ -24,14 +25,22 @@ AUDIO_BITRATE = 320
 
 class YTDLBuffer(io.BufferedIOBase):
     def __init__(self, url: str) -> None:
-        self.initialized = False
-        self.url = url
-        self.proc: subprocess.Popen[bytes] | None = None
+        self.proc: subprocess.Popen[bytes] = YTDLBuffer.__create_process(url)
 
-    def __ensure_initialized(self) -> None:
-        if self.initialized:
-            return
-        print(f"[ ] YTDLBuffer creating process for {self.url}")
+    def read(self, n: int | None = None) -> bytes:
+        # print("[ ] YTDLBuffer read")
+        assert self.proc.stdout is not None
+        return self.proc.stdout.read(-1 if n is None else n)
+
+    def cleanup(self) -> None:
+        print("[ ] YTDLBuffer cleanup")
+        if self.proc is not None:
+            self.proc.terminate()
+            print("[ ] process cleaned up")
+
+    @staticmethod
+    def __create_process(url: str) -> subprocess.Popen[bytes]:
+        print(f"[ ] YTDLBuffer creating process for {url}")
         args = [
             "-x",
             # Audio options, breaks generic downloader.
@@ -40,34 +49,18 @@ class YTDLBuffer(io.BufferedIOBase):
             "--cookies",
             "cookie.txt",
             "--no-warnings",
-            self.url,
+            url,
             "-o",
             "-",
             "--quiet",
         ]
         print("[ ] yt-dlp", *args)
-        self.proc = subprocess.Popen(
+        return subprocess.Popen(
             executable="yt-dlp",
             args=args,
             stdout=asyncio.subprocess.PIPE,
             bufsize=0,
         )
-        self.initialized = True
-
-    def read(self, n: int | None = None) -> bytes:
-        # print("[ ] YTDLBuffer read")
-        self.__ensure_initialized()
-        assert self.proc is not None and self.proc.stdout is not None
-        return self.proc.stdout.read(-1 if n is None else n)
-
-    def cleanup(self) -> None:
-        print("[ ] YTDLBuffer cleanup")
-        if not self.initialized:
-            return
-        if self.proc is not None:
-            self.proc.terminate()
-            self.proc = None
-            print("[ ] process cleaned up")
 
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
@@ -162,36 +155,27 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 
 
 class BufferedAudioSource(discord.AudioSource):
-    def __init__(self, source: discord.AudioSource) -> None:
-        self.initialized = False
+    def __init__(self, source: discord.AudioSource, executor: Executor) -> None:
         self.done = False
         self.max_chunk_count = 256
         self.preload_chunk_count = 128
         self.source = source
+        self.executor = executor
         self.chunks: list[bytes] = []
         self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
-        self.fetcher_thread = threading.Thread(target=self.__fetcher_main)
+        self.future = self.executor.submit(self.__fetcher_task)
+        with self.chunk_sem:
+            pass
 
     def drain(self) -> None:
         with self.access_sem:
             self.chunks.clear()
             self.cv.notify()
 
-    def ensure_initialized(self) -> None:
-        if self.initialized:
-            return
-
-        self.fetcher_thread.start()
-        self.initialized = True
-
-        with self.chunk_sem:
-            pass
-
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
-        self.ensure_initialized()
         self.chunk_sem.acquire()
         with self.access_sem:
             if not self.chunks:
@@ -204,7 +188,7 @@ class BufferedAudioSource(discord.AudioSource):
                 self.cv.notify()
             return c
 
-    def __fetcher_main(self) -> None:
+    def __fetcher_task(self) -> None:
         chunks_pending = 0
         while True:
             with self.access_sem:
@@ -230,27 +214,26 @@ class BufferedAudioSource(discord.AudioSource):
 
     def cleanup(self) -> None:
         print("[ ] BufferedAudioSource cleanup")
-        if not self.initialized:
+        if not self.future:
             return
         with self.access_sem:
             self.done = True
             self.cv.notify()
-        self.fetcher_thread.join()
+        self.future.result()
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, queue: discord.AudioSource, volume: float) -> None:
-        self.queue = queue
-        self.buffered_audio = BufferedAudioSource(queue)
+    def __init__(
+        self, queue: discord.AudioSource, volume: float, executor: Executor
+    ) -> None:
+        self.buffered_audio = BufferedAudioSource(queue, executor)
         super().__init__(self.buffered_audio, volume)
-
-    def prefetch(self) -> None:
-        self.buffered_audio.ensure_initialized()
 
 
 class Audio(discord.ext.commands.Cog):
-    def __init__(self, bot: discord.ext.commands.Bot) -> None:
+    def __init__(self, bot: discord.ext.commands.Bot, executor: Executor) -> None:
         self.bot = bot
+        self.executor = executor
         self.queue: YTDLQueuedStreamAudio | None = None
         self.source: YTDLSource | None = None
         self.is_playing = False
@@ -275,40 +258,49 @@ class Audio(discord.ext.commands.Cog):
         print(f"[ ] yt {url}")
         if self.queue is None:
             self.queue = YTDLQueuedStreamAudio()
-        self.queue.add(url)
-        if not self.is_playing:
-            print("[ ] voice client not playing, starting")
-            self.is_playing = True
-            async with ctx.typing():
-                self.source = YTDLSource(self.queue, self._volume)
-                self.source.prefetch()
+        queue = self.queue
 
-            def finalizer(self, err):
-                if err:
-                    print(f"[!] player error: {err}")
-                else:
-                    print("[ ] finished playing")
-                    self.is_playing = False
-
-            cast(discord.VoiceClient, ctx.voice_client).play(
-                self.source,
-                signal_type="music",
-                bitrate=AUDIO_BITRATE,
-                fec=False,
-                # fec=True,
-                # expected_packet_loss=0.05,
-                after=lambda err: finalizer(self, err),
+        await asyncio.to_thread(lambda: queue.add(url))
+        if self.is_playing:
+            return
+        print("[ ] voice client not playing, starting")
+        self.is_playing = True
+        async with ctx.typing():
+            self.source = await asyncio.to_thread(
+                lambda: YTDLSource(
+                    queue,
+                    self._volume,
+                    self.executor,
+                )
             )
 
-            print("[ ] play started")
+        def finalizer(self, err):
+            if err:
+                print(f"[!] player error: {err}")
+            else:
+                print("[ ] finished playing")
+                self.is_playing = False
+
+        cast(discord.VoiceClient, ctx.voice_client).play(
+            self.source,
+            signal_type="music",
+            bitrate=AUDIO_BITRATE,
+            fec=False,
+            # fec=True,
+            # expected_packet_loss=0.05,
+            after=lambda err: finalizer(self, err),
+        )
+
+        print("[ ] play started")
 
     @discord.ext.commands.command()
     async def skip(self, _ctx: discord.ext.commands.Context) -> None:
         print("[ ] skip")
         if self.source and self.source.buffered_audio:
             self.source.buffered_audio.drain()
-        if self.queue is not None:
-            self.queue.skip()
+        queue = self.queue
+        if queue is not None:
+            await asyncio.to_thread(queue.skip)
 
     @discord.ext.commands.command()
     async def volume(self, ctx: discord.ext.commands.Context, volume: int) -> None:
@@ -431,9 +423,10 @@ async def main() -> None:
         if bot_member.guild.voice_client is not None:
             await bot_member.guild.voice_client.disconnect(force=True)
 
-    async with bot:
-        await bot.add_cog(Audio(bot))
-        await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        async with bot:
+            await bot.add_cog(Audio(bot, executor))
+            await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
 
 
 if __name__ == "__main__":
