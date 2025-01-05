@@ -5,15 +5,18 @@
 import asyncio
 import subprocess
 import threading
-from typing import cast
+from typing import cast, Callable, Awaitable
 import os
 import io
 import sys
+import json
 from concurrent.futures import Executor, ThreadPoolExecutor
+import logging
 import aiohttp
 import discord
 import discord.ext.commands
 from dotenv import load_dotenv
+from jellyfin_apiclient_python import JellyfinClient
 
 load_dotenv(dotenv_path=os.environ["ENV_FILE"] if "ENV_FILE" in os.environ else None)
 
@@ -21,6 +24,12 @@ DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_BOT_COMMAND_PREFIX = os.environ.get("DISCORD_BOT_COMMAND_PREFIX", "!")
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
 HEALTHCHECK_ADDRESS = os.environ["HEALTHCHECK_ADDRESS"]
+JELLYFIN_API_KEY = os.environ["JELLYFIN_API_KEY"]
+JELLYFIN_APP_NAME = os.environ["JELLYFIN_APP_NAME"]
+JELLYFIN_APP_VERSION = os.environ["JELLYFIN_APP_VERSION"]
+JELLYFIN_ADDRESS = os.environ["JELLYFIN_ADDRESS"]
+JELLYFIN_USER_ID = os.environ["JELLYFIN_USER_ID"]
+JELLYFIN_LIBRARY_ID = os.environ["JELLYFIN_LIBRARY_ID"]
 AUDIO_BITRATE = 320
 
 
@@ -53,7 +62,6 @@ class YTDLBuffer(io.BufferedIOBase):
             url,
             "-o",
             "-",
-            "--quiet",
         ]
         print("[ ] yt-dlp", *args)
         return subprocess.Popen(
@@ -233,14 +241,76 @@ class YTDLSource(discord.PCMVolumeTransformer):
         super().__init__(self.buffered_audio, volume)
 
 
+class SelectTrack(discord.ui.Select):
+    def __init__(self) -> None:
+        super().__init__()
+        self._callback: Callable[[discord.Interaction], Awaitable[None]] | None = None
+
+    def selected_value(self) -> str:
+        return self.values[0]
+
+    def set_callback(self, callback: Callable[[discord.Interaction], Awaitable[None]]):
+        self._callback = callback
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert self._callback
+        return await self._callback(interaction)
+
+
 class Audio(discord.ext.commands.Cog):
-    def __init__(self, bot: discord.ext.commands.Bot, executor: Executor) -> None:
+    def __init__(
+        self,
+        bot: discord.ext.commands.Bot,
+        executor: Executor,
+        jellyfin_client: JellyfinClient | None = None,
+    ) -> None:
         self.bot = bot
         self.executor = executor
         self.queue: YTDLQueuedStreamAudio | None = None
         self.source: YTDLSource | None = None
         self.is_playing = False
         self._volume = 0.1
+        self.jellyfin_client = jellyfin_client
+
+    def __queue(self) -> YTDLQueuedStreamAudio:
+        if self.queue is not None:
+            return self.queue
+        self.queue = YTDLQueuedStreamAudio()
+        return self.queue
+
+    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
+        queue = self.__queue()
+        await queue.add(url)
+        if self.is_playing:
+            return
+        print("[ ] voice client not playing, starting")
+        self.is_playing = True
+        self.source = await asyncio.to_thread(
+            lambda: YTDLSource(
+                queue,
+                self._volume,
+                self.executor,
+            )
+        )
+
+        def finalizer(self, err):
+            if err:
+                print(f"[!] player error: {err}")
+            else:
+                print("[ ] finished playing")
+                self.is_playing = False
+
+        voice_client.play(
+            self.source,
+            signal_type="music",
+            bitrate=AUDIO_BITRATE,
+            fec=False,
+            # fec=True,
+            # expected_packet_loss=0.05,
+            after=lambda err: finalizer(self, err),
+        )
+
+        print("[ ] play started")
 
     @discord.ext.commands.command()
     async def join(self, ctx: discord.ext.commands.Context) -> None:
@@ -252,42 +322,62 @@ class Audio(discord.ext.commands.Cog):
     @discord.ext.commands.command()
     async def yt(self, ctx: discord.ext.commands.Context, *, url: str) -> None:
         print(f"[ ] yt {url}")
-        if self.queue is None:
-            self.queue = YTDLQueuedStreamAudio()
-        queue = self.queue
-
-        await queue.add(url)
-        if self.is_playing:
-            return
-        print("[ ] voice client not playing, starting")
-        self.is_playing = True
         async with ctx.typing():
-            self.source = await asyncio.to_thread(
-                lambda: YTDLSource(
-                    queue,
-                    self._volume,
-                    self.executor,
-                )
-            )
+            await self.__enqueue(cast(discord.VoiceClient, ctx.voice_client), url)
 
-        def finalizer(self, err):
-            if err:
-                print(f"[!] player error: {err}")
-            else:
-                print("[ ] finished playing")
-                self.is_playing = False
+    @discord.ext.commands.command()
+    async def jf(self, ctx: discord.ext.commands.Context, *, query: str) -> None:
+        if self.jellyfin_client is None:
+            await ctx.send("jellyfin not set up")
+            return
 
-        cast(discord.VoiceClient, ctx.voice_client).play(
-            self.source,
-            signal_type="music",
-            bitrate=AUDIO_BITRATE,
-            fec=False,
-            # fec=True,
-            # expected_packet_loss=0.05,
-            after=lambda err: finalizer(self, err),
+        jellyfin_client = self.jellyfin_client
+
+        print(f"[ ] jf {query}")
+        result = await asyncio.to_thread(
+            self.jellyfin_client.jellyfin.search_media_items,
+            media="Music",
+            term=query,
+            parent_id=JELLYFIN_LIBRARY_ID,
         )
 
-        print("[ ] play started")
+        if len(result["Items"]) == 0:
+            await ctx.send("No results")
+            return
+
+        select = SelectTrack()
+
+        def option_label(index: int, entry: dict) -> str:
+            artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
+            return f"{index + 1}. {artist_name} - {entry["Name"]}"
+
+        for index, entry in enumerate(result["Items"]):
+            print(option_label(index, entry))
+            print(json.dumps(entry, indent=2))
+            if index >= 10:
+                break
+            select.add_option(label=option_label(index, entry))
+
+        view = discord.ui.View()
+        view.add_item(select)
+        message = await ctx.send("Select", view=view)
+
+        async def on_selected(_interaction: discord.Interaction):
+            await message.delete()
+
+            item = [
+                entry
+                for index, entry in enumerate(result["Items"])
+                if option_label(index, entry) == select.selected_value()
+            ][0]
+
+            await self.__ensure_voice(ctx)
+            await self.__enqueue(
+                cast(discord.VoiceClient, ctx.voice_client),
+                jellyfin_client.jellyfin.download_url(item["Id"]),
+            )
+
+        select.set_callback(on_selected)
 
     @discord.ext.commands.command()
     async def skip(self, _ctx: discord.ext.commands.Context) -> None:
@@ -347,6 +437,9 @@ class Audio(discord.ext.commands.Cog):
     @yt.before_invoke
     @join.before_invoke
     async def ensure_voice(self, ctx: discord.ext.commands.Context) -> None:
+        await self.__ensure_voice(ctx)
+
+    async def __ensure_voice(self, ctx: discord.ext.commands.Context) -> None:
         author = cast(discord.Member, ctx.author)
         if ctx.voice_client is None:
             if author.voice and author.voice.channel:
@@ -391,6 +484,8 @@ async def healthcheck() -> None:
 
 
 async def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+
     intents = discord.Intents.default()
     intents.message_content = True
 
@@ -421,9 +516,25 @@ async def main() -> None:
         if bot_member.guild.voice_client is not None:
             await bot_member.guild.voice_client.disconnect(force=True)
 
+    jellyfin_client = JellyfinClient()
+    jellyfin_client.config.data["app.name"] = JELLYFIN_APP_NAME
+    jellyfin_client.config.data["app.version"] = JELLYFIN_APP_VERSION
+    jellyfin_client.config.data["auth.ssl"] = True
+    jellyfin_client.authenticate(
+        {
+            "Servers": [
+                {
+                    "AccessToken": JELLYFIN_API_KEY,
+                    "address": JELLYFIN_ADDRESS,
+                    "UserId": JELLYFIN_USER_ID,
+                }
+            ]
+        },
+        discover=False,
+    )
     with ThreadPoolExecutor(max_workers=32) as executor:
         async with bot:
-            await bot.add_cog(Audio(bot, executor))
+            await bot.add_cog(Audio(bot, executor, jellyfin_client))
             await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
 
 
