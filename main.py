@@ -372,10 +372,11 @@ class Audio(discord.ext.commands.Cog):
             ][0]
 
             await self.__ensure_voice(ctx)
-            await self.__enqueue(
-                cast(discord.VoiceClient, ctx.voice_client),
-                jellyfin_client.jellyfin.download_url(item["Id"]),
-            )
+            async with ctx.typing():
+                await self.__enqueue(
+                    cast(discord.VoiceClient, ctx.voice_client),
+                    jellyfin_client.jellyfin.download_url(item["Id"]),
+                )
 
         select.set_callback(on_selected)
 
