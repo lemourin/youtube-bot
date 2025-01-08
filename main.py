@@ -360,7 +360,7 @@ class Audio(discord.ext.commands.Cog):
 
         view = discord.ui.View()
         view.add_item(select)
-        message = await ctx.send("Select", view=view)
+        message = await ctx.send("Pick an audio track.", view=view, ephemeral=True, delete_after=30)
 
         async def on_selected(_interaction: discord.Interaction):
             await message.delete()
