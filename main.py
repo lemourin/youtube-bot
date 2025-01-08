@@ -5,7 +5,7 @@
 import asyncio
 import subprocess
 import threading
-from typing import cast, Callable, Awaitable
+from typing import cast, Callable, Awaitable, Dict
 import os
 import io
 import sys
@@ -256,39 +256,25 @@ class SelectTrack(discord.ui.Select):
         return await self._callback(interaction)
 
 
-class Audio(discord.ext.commands.Cog):
-    def __init__(
-        self,
-        bot: discord.ext.commands.Bot,
-        executor: Executor,
-        jellyfin_client: JellyfinClient | None = None,
-    ) -> None:
-        self.bot = bot
-        self.executor = executor
-        self.queue: YTDLQueuedStreamAudio | None = None
-        self.source: YTDLSource | None = None
-        self.is_playing = False
+class GuildState:
+    def __init__(self, executor: Executor) -> None:
+        self._executor = executor
+        self._queue = YTDLQueuedStreamAudio()
+        self._source: YTDLSource | None = None
+        self._is_playing = False
         self._volume = 0.1
-        self.jellyfin_client = jellyfin_client
 
-    def __queue(self) -> YTDLQueuedStreamAudio:
-        if self.queue is not None:
-            return self.queue
-        self.queue = YTDLQueuedStreamAudio()
-        return self.queue
-
-    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
-        queue = self.__queue()
-        await queue.add(url)
-        if self.is_playing:
+    async def enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
+        await self._queue.add(url)
+        if self._is_playing:
             return
         print("[ ] voice client not playing, starting")
-        self.is_playing = True
-        self.source = await asyncio.to_thread(
+        self._is_playing = True
+        self._source = await asyncio.to_thread(
             lambda: YTDLSource(
-                queue,
+                self._queue,
                 self._volume,
-                self.executor,
+                self._executor,
             )
         )
 
@@ -297,10 +283,10 @@ class Audio(discord.ext.commands.Cog):
                 print(f"[!] player error: {err}")
             else:
                 print("[ ] finished playing")
-                self.is_playing = False
+                self._is_playing = False
 
         voice_client.play(
-            self.source,
+            self._source,
             signal_type="music",
             bitrate=AUDIO_BITRATE,
             fec=False,
@@ -310,6 +296,79 @@ class Audio(discord.ext.commands.Cog):
         )
 
         print("[ ] play started")
+
+    async def skip(self) -> None:
+        if self._source is not None and self._source.buffered_audio:
+            self._source.buffered_audio.drain()
+        if self._queue:
+            await self._queue.skip()
+
+    def is_playing(self) -> bool:
+        return self._is_playing
+
+    def cleanup(self) -> None:
+        if self._source is not None:
+            self._source.cleanup()
+        self._queue.cleanup()
+        self._queue.clear()
+
+    def set_volume(self, value: float) -> None:
+        self._volume = value
+
+
+class Audio(discord.ext.commands.Cog):
+    def __init__(
+        self,
+        bot: discord.ext.commands.Bot,
+        executor: Executor,
+        jellyfin_client: JellyfinClient | None = None,
+    ) -> None:
+        self.bot = bot
+        self.executor = executor
+        self.state: Dict[int, GuildState] = {}
+        self.jellyfin_client = jellyfin_client
+
+        @bot.event
+        async def on_ready() -> None:
+            assert bot.user is not None
+            print(f"[ ] logged in {bot.user} {bot.user.id}")
+
+        @bot.event
+        async def on_voice_state_update(
+            member: discord.Member,
+            before: discord.VoiceState,
+            after: discord.VoiceState,
+        ) -> None:
+            assert bot.user is not None
+            if (
+                member.id == bot.user.id
+                and member.guild.id in self.state
+                and not after.channel
+            ):
+                self.state[member.guild.id].cleanup()
+                del self.state[member.guild.id]
+
+            if before.channel is None:
+                return
+
+            if len(before.channel.members) != 1:
+                return
+            bot_member = before.channel.members[0]
+            if bot_member.id != bot.user.id:
+                return
+            if bot_member.guild.voice_client is not None:
+                await bot_member.guild.voice_client.disconnect(force=True)
+
+    def __guild_state(self, guild_id: int) -> GuildState:
+        if guild_id in self.state:
+            return self.state[guild_id]
+        state = GuildState(self.executor)
+        self.state[guild_id] = state
+        return state
+
+    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
+        state = self.__guild_state(voice_client.guild.id)
+        await state.enqueue(voice_client, url)
 
     @discord.ext.commands.command()
     async def join(self, ctx: discord.ext.commands.Context) -> None:
@@ -385,13 +444,13 @@ class Audio(discord.ext.commands.Cog):
         select.set_callback(on_selected)
 
     @discord.ext.commands.command()
-    async def skip(self, _ctx: discord.ext.commands.Context) -> None:
+    async def skip(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] skip")
-        if self.source and self.source.buffered_audio:
-            self.source.buffered_audio.drain()
-        queue = self.queue
-        if queue is not None:
-            await queue.skip()
+        if not ctx.guild:
+            return
+        if ctx.guild.id not in self.state:
+            return
+        await self.state[ctx.guild.id].skip()
 
     @discord.ext.commands.command()
     async def volume(self, ctx: discord.ext.commands.Context, volume: int) -> None:
@@ -399,8 +458,10 @@ class Audio(discord.ext.commands.Cog):
         volume = max(min(volume, 200), 0)
         voice_client = cast(discord.VoiceClient, ctx.voice_client)
 
-        self._volume = volume / 100
-        cast(YTDLSource, voice_client.source).volume = self._volume
+        assert ctx.guild
+        state = self.__guild_state(ctx.guild.id)
+        state.set_volume(volume / 100)
+        cast(YTDLSource, voice_client.source).volume = volume / 100
         await ctx.send(f"volume set to {volume}%")
 
     @discord.ext.commands.command()
@@ -409,25 +470,12 @@ class Audio(discord.ext.commands.Cog):
         voice_client = cast(discord.VoiceClient, ctx.voice_client)
         if voice_client.source is not None:
             voice_client.stop()
-        if self.source is not None:
-            self.source.cleanup()
-            self.source = None
-        if self.queue is not None:
-            self.queue.cleanup()
-            self.queue.clear()
 
     @discord.ext.commands.command()
     async def leave(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] leave")
         if ctx.voice_client is not None:
             await ctx.voice_client.disconnect(force=False)
-        if self.source is not None:
-            self.source.cleanup()
-            self.source = None
-        if self.queue is not None:
-            self.queue.clear()
-            self.queue.cleanup()
-            self.queue = None
 
     @discord.ext.commands.command()
     async def die(self, _ctx: discord.ext.commands.Context) -> None:
@@ -462,8 +510,8 @@ class Audio(discord.ext.commands.Cog):
         if ctx.voice_client is None:
             await ctx.send("no voice channel, dumbass")
             raise discord.ext.commands.CommandError("not connected to a voice channel")
-
-        if not self.is_playing:
+        assert ctx.guild
+        if ctx.guild.id not in self.state or not self.state[ctx.guild.id].is_playing():
             await ctx.send("not playing, dumbass")
             raise discord.ext.commands.CommandError("audio not playing")
 
@@ -500,26 +548,6 @@ async def main() -> None:
         ),
         intents=intents,
     )
-
-    @bot.event
-    async def on_ready() -> None:
-        assert bot.user is not None
-        print(f"[ ] logged in {bot.user} {bot.user.id}")
-
-    @bot.event
-    async def on_voice_state_update(
-        _member: discord.Member, before: discord.VoiceState, _after: discord.VoiceState
-    ) -> None:
-        if before.channel is None:
-            return
-        if len(before.channel.members) != 1:
-            return
-        assert bot.user is not None
-        bot_member = before.channel.members[0]
-        if bot_member.id != bot.user.id:
-            return
-        if bot_member.guild.voice_client is not None:
-            await bot_member.guild.voice_client.disconnect(force=True)
 
     jellyfin_client: JellyfinClient | None = None
     if JELLYFIN_ADDRESS:
