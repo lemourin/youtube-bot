@@ -9,7 +9,6 @@ from typing import cast, Callable, Awaitable
 import os
 import io
 import sys
-import json
 from concurrent.futures import Executor, ThreadPoolExecutor
 import logging
 import aiohttp
@@ -18,18 +17,18 @@ import discord.ext.commands
 from dotenv import load_dotenv
 from jellyfin_apiclient_python import JellyfinClient
 
-load_dotenv(dotenv_path=os.environ["ENV_FILE"] if "ENV_FILE" in os.environ else None)
+load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_BOT_COMMAND_PREFIX = os.environ.get("DISCORD_BOT_COMMAND_PREFIX", "!")
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
 HEALTHCHECK_ADDRESS = os.environ["HEALTHCHECK_ADDRESS"]
-JELLYFIN_API_KEY = os.environ["JELLYFIN_API_KEY"]
-JELLYFIN_APP_NAME = os.environ["JELLYFIN_APP_NAME"]
-JELLYFIN_APP_VERSION = os.environ["JELLYFIN_APP_VERSION"]
-JELLYFIN_ADDRESS = os.environ["JELLYFIN_ADDRESS"]
-JELLYFIN_USER_ID = os.environ["JELLYFIN_USER_ID"]
-JELLYFIN_LIBRARY_ID = os.environ["JELLYFIN_LIBRARY_ID"]
+JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY")
+JELLYFIN_APP_NAME = os.environ.get("JELLYFIN_APP_NAME")
+JELLYFIN_APP_VERSION = os.environ.get("JELLYFIN_APP_VERSION")
+JELLYFIN_ADDRESS = os.environ.get("JELLYFIN_ADDRESS")
+JELLYFIN_USER_ID = os.environ.get("JELLYFIN_USER_ID")
+JELLYFIN_LIBRARY_ID = os.environ.get("JELLYFIN_LIBRARY_ID")
 AUDIO_BITRATE = 320
 
 
@@ -341,26 +340,31 @@ class Audio(discord.ext.commands.Cog):
             parent_id=JELLYFIN_LIBRARY_ID,
         )
 
-        if len(result["Items"]) == 0:
-            await ctx.send("No results")
-            return
-
         select = SelectTrack()
 
         def option_label(index: int, entry: dict) -> str:
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             return f"{index + 1}. {artist_name} - {entry["Name"]}"
 
-        for index, entry in enumerate(result["Items"]):
-            print(option_label(index, entry))
-            print(json.dumps(entry, indent=2))
-            if index >= 10:
+        option_count = 0
+        for entry in result["Items"]:
+            if option_count >= 10:
                 break
-            select.add_option(label=option_label(index, entry))
+            if entry["Type"] != "Audio":
+                continue
+            print(option_label(option_count, entry))
+            select.add_option(label=option_label(option_count, entry))
+            option_count += 1
+
+        if option_count == 0:
+            await ctx.send("No results")
+            return
 
         view = discord.ui.View()
         view.add_item(select)
-        message = await ctx.send("Pick an audio track.", view=view, ephemeral=True, delete_after=30)
+        message = await ctx.send(
+            "Pick an audio track.", view=view, ephemeral=True, delete_after=30
+        )
 
         async def on_selected(_interaction: discord.Interaction):
             await message.delete()
@@ -517,22 +521,25 @@ async def main() -> None:
         if bot_member.guild.voice_client is not None:
             await bot_member.guild.voice_client.disconnect(force=True)
 
-    jellyfin_client = JellyfinClient()
-    jellyfin_client.config.data["app.name"] = JELLYFIN_APP_NAME
-    jellyfin_client.config.data["app.version"] = JELLYFIN_APP_VERSION
-    jellyfin_client.config.data["auth.ssl"] = True
-    jellyfin_client.authenticate(
-        {
-            "Servers": [
-                {
-                    "AccessToken": JELLYFIN_API_KEY,
-                    "address": JELLYFIN_ADDRESS,
-                    "UserId": JELLYFIN_USER_ID,
-                }
-            ]
-        },
-        discover=False,
-    )
+    jellyfin_client: JellyfinClient | None = None
+    if JELLYFIN_ADDRESS:
+        jellyfin_client = JellyfinClient()
+        jellyfin_client.config.data["app.name"] = JELLYFIN_APP_NAME
+        jellyfin_client.config.data["app.version"] = JELLYFIN_APP_VERSION
+        jellyfin_client.config.data["auth.ssl"] = True
+        jellyfin_client.authenticate(
+            {
+                "Servers": [
+                    {
+                        "AccessToken": JELLYFIN_API_KEY,
+                        "address": JELLYFIN_ADDRESS,
+                        "UserId": JELLYFIN_USER_ID,
+                    }
+                ]
+            },
+            discover=False,
+        )
+
     with ThreadPoolExecutor(max_workers=32) as executor:
         async with bot:
             await bot.add_cog(Audio(bot, executor, jellyfin_client))
