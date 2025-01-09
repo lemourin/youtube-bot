@@ -320,6 +320,12 @@ class GuildState:
         self._volume = value
 
 
+def trim_option_text(text: str):
+    if len(text) <= 100:
+        return text
+    return f"{text[:97]}..."
+
+
 class Audio(discord.ext.commands.Cog):
     def __init__(
         self,
@@ -396,14 +402,16 @@ class Audio(discord.ext.commands.Cog):
 
         response = await asyncio.to_thread(
             self.youtube_client.search()
-            .list(part="snippet", order="viewCount", maxResults=10, q=query)
+            .list(part="snippet", maxResults=10, q=query)
             .execute
         )
 
         select = SelectTrack()
 
         def option_label(index: int, entry: dict) -> str:
-            return f"{index + 1}. {html.unescape(entry["snippet"]["title"])}"
+            return trim_option_text(
+                f"{index + 1}. {html.unescape(entry["snippet"]["title"])}"
+            )
 
         entries: list[Dict] = []
         for entry in response["items"]:
@@ -464,7 +472,7 @@ class Audio(discord.ext.commands.Cog):
 
         def option_label(index: int, entry: dict) -> str:
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
-            return f"{index + 1}. {artist_name} - {entry["Name"]}"
+            return trim_option_text(f"{index + 1}. {artist_name} - {entry["Name"]}")
 
         entries: list[Dict] = []
         for entry in result["Items"]:
