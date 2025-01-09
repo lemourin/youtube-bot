@@ -395,7 +395,9 @@ class Audio(discord.ext.commands.Cog):
             return
 
         response = await asyncio.to_thread(
-            self.youtube_client.search().list(part="snippet", q=query).execute
+            self.youtube_client.search()
+            .list(part="snippet", maxResults=10, q=query)
+            .execute
         )
 
         select = SelectTrack()
@@ -403,15 +405,18 @@ class Audio(discord.ext.commands.Cog):
         def option_label(index: int, entry: dict) -> str:
             return f"{index + 1}. {html.unescape(entry["snippet"]["title"])}"
 
-        option_count = 0
+        entries: list[Dict] = []
         for entry in response["items"]:
-            if entry["id"]["kind"] != "youtube#video":
-                continue
-            print(option_label(option_count, entry))
-            select.add_option(label=option_label(option_count, entry))
-            option_count += 1
+            if len(entries) >= 10:
+                break
+            if entry["id"]["kind"] == "youtube#video":
+                entries.append(entry)
 
-        if option_count == 0:
+        for index, entry in enumerate(entries):
+            print(option_label(index, entry))
+            select.add_option(label=option_label(index, entry))
+
+        if not entries:
             await ctx.send("No results")
             return
 
@@ -426,7 +431,7 @@ class Audio(discord.ext.commands.Cog):
 
             item = [
                 entry
-                for index, entry in enumerate(response["items"])
+                for index, entry in enumerate(entries)
                 if option_label(index, entry) == select.selected_value()
             ][0]
 
@@ -461,17 +466,18 @@ class Audio(discord.ext.commands.Cog):
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             return f"{index + 1}. {artist_name} - {entry["Name"]}"
 
-        option_count = 0
+        entries: list[Dict] = []
         for entry in result["Items"]:
-            if option_count >= 10:
+            if len(entries) >= 10:
                 break
-            if entry["Type"] != "Audio":
-                continue
-            print(option_label(option_count, entry))
-            select.add_option(label=option_label(option_count, entry))
-            option_count += 1
+            if entry["Type"] == "Audio":
+                entries.append(entry)
 
-        if option_count == 0:
+        for index, entry in enumerate(entries):
+            print(option_label(index, entry))
+            select.add_option(label=option_label(index, entry))
+
+        if not entries == 0:
             await ctx.send("No results")
             return
 
@@ -486,7 +492,7 @@ class Audio(discord.ext.commands.Cog):
 
             item = [
                 entry
-                for index, entry in enumerate(result["Items"])
+                for index, entry in enumerate(entries)
                 if option_label(index, entry) == select.selected_value()
             ][0]
 
