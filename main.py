@@ -477,7 +477,7 @@ class Audio(discord.ext.commands.Cog):
             print(option_label(index, entry))
             select.add_option(label=option_label(index, entry))
 
-        if not entries == 0:
+        if not entries:
             await ctx.send("No results")
             return
 
