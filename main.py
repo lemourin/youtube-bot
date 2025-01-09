@@ -5,7 +5,7 @@
 import asyncio
 import subprocess
 import threading
-from typing import cast, Callable, Awaitable, Dict
+from typing import cast, Callable, Awaitable, Dict, Any
 import os
 import io
 import sys
@@ -15,6 +15,8 @@ import aiohttp
 import discord
 import discord.ext.commands
 from dotenv import load_dotenv
+import validators
+import googleapiclient.discovery
 from jellyfin_apiclient_python import JellyfinClient
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
@@ -22,7 +24,8 @@ load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_BOT_COMMAND_PREFIX = os.environ.get("DISCORD_BOT_COMMAND_PREFIX", "!")
 DISCORD_ADMIN_ID = int(os.environ["DISCORD_ADMIN_ID"])
-HEALTHCHECK_ADDRESS = os.environ["HEALTHCHECK_ADDRESS"]
+HEALTHCHECK_ADDRESS = os.environ.get("HEALTHCHECK_ADDRESS")
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 JELLYFIN_API_KEY = os.environ.get("JELLYFIN_API_KEY")
 JELLYFIN_APP_NAME = os.environ.get("JELLYFIN_APP_NAME")
 JELLYFIN_APP_VERSION = os.environ.get("JELLYFIN_APP_VERSION")
@@ -322,11 +325,13 @@ class Audio(discord.ext.commands.Cog):
         bot: discord.ext.commands.Bot,
         executor: Executor,
         jellyfin_client: JellyfinClient | None = None,
+        youtube_client: Any = None,
     ) -> None:
         self.bot = bot
         self.executor = executor
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
+        self.youtube_client = youtube_client
 
         @bot.event
         async def on_ready() -> None:
@@ -357,7 +362,7 @@ class Audio(discord.ext.commands.Cog):
             if bot_member.id != bot.user.id:
                 return
             if bot_member.guild.voice_client is not None:
-                await bot_member.guild.voice_client.disconnect(force=True)
+                await bot_member.guild.voice_client.disconnect(force=False)
 
     def __guild_state(self, guild_id: int) -> GuildState:
         if guild_id in self.state:
@@ -378,10 +383,56 @@ class Audio(discord.ext.commands.Cog):
         await cast(discord.VoiceClient, ctx.voice_client).move_to(author.voice.channel)
 
     @discord.ext.commands.command()
-    async def yt(self, ctx: discord.ext.commands.Context, *, url: str) -> None:
-        print(f"[ ] yt {url}")
-        async with ctx.typing():
-            await self.__enqueue(cast(discord.VoiceClient, ctx.voice_client), url)
+    async def yt(self, ctx: discord.ext.commands.Context, *, query: str) -> None:
+        print(f"[ ] yt {query}")
+        if validators.url(query):
+            async with ctx.typing():
+                await self.__enqueue(cast(discord.VoiceClient, ctx.voice_client), query)
+
+        response = await asyncio.to_thread(
+            self.youtube_client.search().list(part="snippet", q=query).execute
+        )
+        
+        select = SelectTrack()
+
+        def option_label(index: int, entry: dict) -> str:
+            return f"{index + 1}. {entry["snippet"]["title"]}"
+        
+        option_count = 0
+        for entry in response["items"]:
+            if entry["id"]["kind"] != "youtube#video":
+                continue
+            print(option_label(option_count, entry))
+            select.add_option(label=option_label(option_count, entry))
+            option_count += 1
+
+        if option_count == 0:
+            await ctx.send("No results")
+            return
+
+        view = discord.ui.View()
+        view.add_item(select)
+        message = await ctx.send(
+            "Pick an audio track.", view=view, ephemeral=True, delete_after=30
+        )
+
+        async def on_selected(_interaction: discord.Interaction):
+            await message.delete()
+
+            item = [
+                entry
+                for index, entry in enumerate(response["items"])
+                if option_label(index, entry) == select.selected_value()
+            ][0]
+
+            await self.__ensure_voice(ctx)
+            async with ctx.typing():
+                await self.__enqueue(
+                    cast(discord.VoiceClient, ctx.voice_client),
+                    f"https://youtube.com/watch?v={item["id"]["videoId"]}",
+                )
+
+        select.set_callback(on_selected)
 
     @discord.ext.commands.command()
     async def jf(self, ctx: discord.ext.commands.Context, *, query: str) -> None:
@@ -524,7 +575,7 @@ class Audio(discord.ext.commands.Cog):
 
 
 async def healthcheck() -> None:
-    if len(HEALTHCHECK_ADDRESS) == 0:
+    if not HEALTHCHECK_ADDRESS or len(HEALTHCHECK_ADDRESS) == 0:
         return
     async with aiohttp.ClientSession() as session:
         while True:
@@ -567,10 +618,17 @@ async def main() -> None:
             },
             discover=False,
         )
+    youtube_client = None
+    if YOUTUBE_API_KEY:
+        youtube_client = googleapiclient.discovery.build(
+            "youtube",
+            "v3",
+            developerKey=YOUTUBE_API_KEY,
+        )
 
     with ThreadPoolExecutor(max_workers=32) as executor:
         async with bot:
-            await bot.add_cog(Audio(bot, executor, jellyfin_client))
+            await bot.add_cog(Audio(bot, executor, jellyfin_client, youtube_client))
             await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
 
 
