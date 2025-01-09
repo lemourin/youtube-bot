@@ -11,6 +11,7 @@ import io
 import sys
 from concurrent.futures import Executor, ThreadPoolExecutor
 import logging
+import html
 import aiohttp
 import discord
 import discord.ext.commands
@@ -389,15 +390,19 @@ class Audio(discord.ext.commands.Cog):
             async with ctx.typing():
                 await self.__enqueue(cast(discord.VoiceClient, ctx.voice_client), query)
 
+        if not self.youtube_client:
+            await ctx.send("YouTube search not set up", ephemeral=True, delete_after=30)
+            return
+
         response = await asyncio.to_thread(
             self.youtube_client.search().list(part="snippet", q=query).execute
         )
-        
+
         select = SelectTrack()
 
         def option_label(index: int, entry: dict) -> str:
-            return f"{index + 1}. {entry["snippet"]["title"]}"
-        
+            return f"{index + 1}. {html.unescape(entry["snippet"]["title"])}"
+
         option_count = 0
         for entry in response["items"]:
             if entry["id"]["kind"] != "youtube#video":
