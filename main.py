@@ -402,7 +402,7 @@ class Audio(discord.ext.commands.Cog):
 
         response = await asyncio.to_thread(
             self.youtube_client.search()
-            .list(part="snippet", maxResults=10, q=query)
+            .list(part="snippet", maxResults=10, type=["video"], q=query)
             .execute
         )
 
