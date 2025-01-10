@@ -371,33 +371,84 @@ class Audio(discord.ext.commands.Cog):
             if bot_member.guild.voice_client is not None:
                 await bot_member.guild.voice_client.disconnect(force=False)
 
-    def __guild_state(self, guild_id: int) -> GuildState:
-        if guild_id in self.state:
-            return self.state[guild_id]
-        state = GuildState(self.executor)
-        self.state[guild_id] = state
-        return state
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="yt",
+                description="Play audio of a YouTube video.",
+                callback=self.yt,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="jf",
+                description="Play audio of a video sourced from a Jellyfin server.",
+                callback=self.jf,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="join",
+                description="Add bot to the voice channel.",
+                callback=self.join,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="skip",
+                description="Skip currently playing audio.",
+                callback=self.skip,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="volume",
+                description="Change volume of the currently playing audio.",
+                callback=self.volume,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="stop",
+                description="Pause audio playback.",
+                callback=self.stop,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="leave",
+                description="Disconnect bot from the voice channel.",
+                callback=self.leave,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="die",
+                description="Kill the bot.",
+                callback=self.die,
+            )
+        )
+        bot.tree.add_command(
+            discord.app_commands.Command(
+                name="ping",
+                description="Ping.",
+                callback=self.ping,
+            )
+        )
 
-    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
-        state = self.__guild_state(voice_client.guild.id)
-        await state.enqueue(voice_client, url)
-
-    @discord.ext.commands.command()
-    async def join(self, ctx: discord.ext.commands.Context) -> None:
-        print("[ ] join")
-        author = cast(discord.Member, ctx.author)
-        assert author.voice is not None
-        await cast(discord.VoiceClient, ctx.voice_client).move_to(author.voice.channel)
-
-    @discord.ext.commands.command()
-    async def yt(self, ctx: discord.ext.commands.Context, *, query: str) -> None:
-        print(f"[ ] yt {query}")
+    @discord.app_commands.describe(query="Either a url or a search query.")
+    async def yt(self, interaction: discord.Interaction, query: str) -> None:
+        print("[ ] yt app command")
         if validators.url(query):
-            async with ctx.typing():
-                await self.__enqueue(cast(discord.VoiceClient, ctx.voice_client), query)
+            await self.__enqueue(await self.__voice_client(interaction), query)
+            await interaction.response.send_message(
+                "Enqueued.", ephemeral=True, delete_after=5
+            )
+            return
 
         if not self.youtube_client:
-            await ctx.send("YouTube search not set up", ephemeral=True, delete_after=30)
+            await interaction.response.send_message(
+                "YouTube search not set up.", ephemeral=True
+            )
             return
 
         response = await asyncio.to_thread(
@@ -425,37 +476,39 @@ class Audio(discord.ext.commands.Cog):
             select.add_option(label=option_label(index, entry))
 
         if not entries:
-            await ctx.send("No results")
+            await interaction.response.send_message("No results", ephemeral=True)
             return
 
         view = discord.ui.View()
         view.add_item(select)
-        message = await ctx.send(
+        await interaction.response.send_message(
             "Pick an audio track.", view=view, ephemeral=True, delete_after=30
         )
 
-        async def on_selected(_interaction: discord.Interaction):
-            await message.delete()
-
+        async def on_selected(selection_interaction: discord.Interaction):
             item = [
                 entry
                 for index, entry in enumerate(entries)
                 if option_label(index, entry) == select.selected_value()
             ][0]
 
-            await self.__ensure_voice(ctx)
-            async with ctx.typing():
-                await self.__enqueue(
-                    cast(discord.VoiceClient, ctx.voice_client),
-                    f"https://youtube.com/watch?v={item["id"]["videoId"]}",
-                )
+            await self.__enqueue(
+                await self.__voice_client(interaction),
+                f"https://youtube.com/watch?v={item["id"]["videoId"]}",
+            )
+            await selection_interaction.response.send_message(
+                "Enqueued.", ephemeral=True, delete_after=5
+            )
+            await interaction.delete_original_response()
 
         select.set_callback(on_selected)
 
-    @discord.ext.commands.command()
-    async def jf(self, ctx: discord.ext.commands.Context, *, query: str) -> None:
+    @discord.app_commands.describe(query="Search query.")
+    async def jf(self, interaction: discord.Interaction, query: str) -> None:
         if self.jellyfin_client is None:
-            await ctx.send("jellyfin not set up")
+            await interaction.response.send_message(
+                "Jellyfin not set up.", ephemeral=True
+            )
             return
 
         jellyfin_client = self.jellyfin_client
@@ -486,111 +539,150 @@ class Audio(discord.ext.commands.Cog):
             select.add_option(label=option_label(index, entry))
 
         if not entries:
-            await ctx.send("No results")
+            await interaction.response.send_message("No results", ephemeral=True)
             return
 
         view = discord.ui.View()
         view.add_item(select)
-        message = await ctx.send(
+        await interaction.response.send_message(
             "Pick an audio track.", view=view, ephemeral=True, delete_after=30
         )
 
-        async def on_selected(_interaction: discord.Interaction):
-            await message.delete()
-
+        async def on_selected(selection_interaction: discord.Interaction):
             item = [
                 entry
                 for index, entry in enumerate(entries)
                 if option_label(index, entry) == select.selected_value()
             ][0]
 
-            await self.__ensure_voice(ctx)
-            async with ctx.typing():
-                await self.__enqueue(
-                    cast(discord.VoiceClient, ctx.voice_client),
-                    jellyfin_client.jellyfin.download_url(item["Id"]),
-                )
+            await self.__enqueue(
+                await self.__voice_client(selection_interaction),
+                jellyfin_client.jellyfin.download_url(item["Id"]),
+            )
+            await selection_interaction.response.send_message(
+                "Enqueued.", ephemeral=True, delete_after=5
+            )
+            await selection_interaction.delete_original_response()
 
         select.set_callback(on_selected)
 
     @discord.ext.commands.command()
-    async def skip(self, ctx: discord.ext.commands.Context) -> None:
-        print("[ ] skip")
-        if not ctx.guild:
-            return
-        if ctx.guild.id not in self.state:
-            return
-        await self.state[ctx.guild.id].skip()
+    async def sync(self, ctx: discord.ext.commands.Context) -> None:
+        print("[ ] sync")
+        assert ctx.guild is not None
 
-    @discord.ext.commands.command()
-    async def volume(self, ctx: discord.ext.commands.Context, volume: int) -> None:
+        guild = discord.Object(id=ctx.guild.id)
+        self.bot.tree.copy_global_to(guild=guild)
+        await self.bot.tree.sync(guild=guild)
+
+    async def join(self, interaction: discord.Interaction) -> None:
+        print("[ ] join")
+        await self.__ensure_voice(interaction)
+        author = cast(discord.Member, interaction.user)
+        assert author.voice is not None
+        await (await self.__voice_client(interaction)).move_to(author.voice.channel)
+        await interaction.response.send_message("Joined.", ephemeral=True)
+
+    async def skip(self, interaction: discord.Interaction) -> None:
+        print("[ ] skip")
+        await self.__ensure_playing(interaction)
+        assert interaction.guild
+        await self.state[interaction.guild.id].skip()
+        await interaction.response.send_message("Skipped.", ephemeral=True)
+
+    @discord.app_commands.describe(volume="Number from 0 to 200.")
+    async def volume(self, interaction: discord.Interaction, volume: int) -> None:
+        await self.__ensure_playing(interaction)
         print(f"[ ] volume {volume}")
         volume = max(min(volume, 200), 0)
-        voice_client = cast(discord.VoiceClient, ctx.voice_client)
+        voice_client = await self.__voice_client(interaction)
 
-        assert ctx.guild
-        state = self.__guild_state(ctx.guild.id)
+        assert interaction.guild
+        state = self.__guild_state(interaction.guild.id)
         state.set_volume(volume / 100)
         cast(YTDLSource, voice_client.source).volume = volume / 100
-        await ctx.send(f"volume set to {volume}%")
+        await interaction.response.send_message(
+            f"volume set to {volume}%", ephemeral=True
+        )
 
-    @discord.ext.commands.command()
-    async def stop(self, ctx: discord.ext.commands.Context) -> None:
+    async def stop(self, interaction: discord.Interaction) -> None:
         print("[ ] stop")
-        voice_client = cast(discord.VoiceClient, ctx.voice_client)
-        if voice_client.source is not None:
-            voice_client.stop()
+        await self.__ensure_playing(interaction)
+        for e in self.bot.voice_clients:
+            voice_client = cast(discord.VoiceClient, e)
+            if voice_client.guild.id == interaction.guild_id:
+                if voice_client.source is not None:
+                    voice_client.stop()
 
-    @discord.ext.commands.command()
-    async def leave(self, ctx: discord.ext.commands.Context) -> None:
+    async def leave(self, interaction: discord.Interaction) -> None:
         print("[ ] leave")
-        if ctx.voice_client is not None:
-            await ctx.voice_client.disconnect(force=False)
+        voice_client = self.__current_voice_client(interaction)
+        if voice_client is not None:
+            await voice_client.disconnect(force=False)
+        await interaction.response.send_message("Left.", ephemeral=True)
 
-    @discord.ext.commands.command()
-    async def die(self, _ctx: discord.ext.commands.Context) -> None:
+    async def die(self, interaction: discord.Interaction) -> None:
         print("[ ] die")
+        await interaction.response.send_message("About to die.", ephemeral=True)
         sys.exit(0)
 
-    @discord.ext.commands.command()
-    async def ping(self, ctx: discord.ext.commands.Context) -> None:
+    async def ping(self, interaction: discord.Interaction) -> None:
         print("[ ] ping")
-        await ctx.send("pong")
+        await interaction.response.send_message("pong", ephemeral=True)
 
-    @yt.before_invoke
-    @join.before_invoke
-    async def ensure_voice(self, ctx: discord.ext.commands.Context) -> None:
-        await self.__ensure_voice(ctx)
-
-    async def __ensure_voice(self, ctx: discord.ext.commands.Context) -> None:
-        author = cast(discord.Member, ctx.author)
-        if ctx.voice_client is None:
-            if author.voice and author.voice.channel:
-                await author.voice.channel.connect()
-            else:
-                await ctx.send("no voice channel, dumbass")
-                raise discord.ext.commands.CommandError(
-                    "author not connected to a voice channel."
-                )
-
-    @volume.before_invoke
-    @stop.before_invoke
-    @skip.before_invoke
-    async def ensure_playing(self, ctx: discord.ext.commands.Context) -> None:
-        if ctx.voice_client is None:
-            await ctx.send("no voice channel, dumbass")
+    async def __ensure_voice(self, interaction: discord.Interaction) -> None:
+        member = cast(discord.Member, interaction.user)
+        if member.voice is None:
+            await interaction.response.send_message(
+                "no voice channel, dumbass", ephemeral=True
+            )
             raise discord.ext.commands.CommandError("not connected to a voice channel")
-        assert ctx.guild
-        if ctx.guild.id not in self.state or not self.state[ctx.guild.id].is_playing():
-            await ctx.send("not playing, dumbass")
+
+    async def __ensure_playing(self, interaction: discord.Interaction) -> None:
+        await self.__ensure_voice(interaction)
+        assert interaction.guild
+        if (
+            interaction.guild.id not in self.state
+            or not self.state[interaction.guild.id].is_playing()
+        ):
+            await interaction.response.send_message(
+                "not playing, dumbass", ephemeral=True
+            )
             raise discord.ext.commands.CommandError("audio not playing")
 
-    # @volume.before_invoke
-    async def ensure_auth(self, ctx: discord.ext.commands.Context) -> None:
-        author_id = None if ctx.author is None else ctx.author.id
-        if author_id != DISCORD_ADMIN_ID:
-            await ctx.send("fuck off, pleb")
-            raise discord.ext.commands.CommandError("not authorirized")
+    def __current_voice_client(
+        self, interaction: discord.Interaction
+    ) -> discord.VoiceClient | None:
+        for e in self.bot.voice_clients:
+            voice_client = cast(discord.VoiceClient, e)
+            if voice_client.guild.id == interaction.guild_id:
+                return voice_client
+        return None
+
+    async def __voice_client(
+        self, interaction: discord.Interaction
+    ) -> discord.VoiceClient:
+        voice_client = self.__current_voice_client(interaction)
+        if voice_client:
+            return voice_client
+        assert isinstance(interaction.user, discord.Member)
+        if interaction.user.voice is None or interaction.user.voice.channel is None:
+            await interaction.response.send_message(
+                "no voice channel, dumbass", ephemeral=True
+            )
+            raise discord.ext.commands.CommandError("not connected to a voice channel")
+        return await interaction.user.voice.channel.connect()
+
+    def __guild_state(self, guild_id: int) -> GuildState:
+        if guild_id in self.state:
+            return self.state[guild_id]
+        state = GuildState(self.executor)
+        self.state[guild_id] = state
+        return state
+
+    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
+        state = self.__guild_state(voice_client.guild.id)
+        await state.enqueue(voice_client, url)
 
 
 async def healthcheck() -> None:
