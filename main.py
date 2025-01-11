@@ -612,7 +612,7 @@ class Audio(discord.ext.commands.Cog):
 
         select.set_callback(on_selected)
         await interaction.response.send_message(
-            f"```{message}```", view=view, ephemeral=True, delete_after=30
+            f"```{message}```", view=view,
         )
 
     @discord.ext.commands.command()
