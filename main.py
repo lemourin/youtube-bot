@@ -551,9 +551,7 @@ class Audio(discord.ext.commands.Cog):
                 break
             if entry["Type"] != "Audio":
                 continue
-            artist_name = (
-                entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
-            )
+            artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             name = f"{artist_name} - {entry["Name"]}"
             entries.append(
                 SearchEntry(
@@ -597,7 +595,16 @@ class Audio(discord.ext.commands.Cog):
         view = discord.ui.View()
         view.add_item(select)
 
+        dismissed = False
+
         async def on_selected(selection_interaction: discord.Interaction):
+            if interaction.user.id != selection_interaction.user.id:
+                await selection_interaction.response.send_message(
+                    "Fuck off.", ephemeral=True, delete_after=5
+                )
+                return
+            nonlocal dismissed
+            dismissed = True
             item = [
                 entry
                 for index, entry in enumerate(entries)
@@ -612,8 +619,12 @@ class Audio(discord.ext.commands.Cog):
 
         select.set_callback(on_selected)
         await interaction.response.send_message(
-            f"```{message}```", view=view,
+            f"```{message}```",
+            view=view,
         )
+        await asyncio.sleep(10)
+        if not dismissed:
+            await interaction.delete_original_response()
 
     @discord.ext.commands.command()
     async def sync(self, ctx: discord.ext.commands.Context) -> None:
