@@ -15,6 +15,7 @@ import html
 import aiohttp
 import discord
 import discord.ext.commands
+import re
 from dotenv import load_dotenv
 import validators
 import googleapiclient.discovery
@@ -326,6 +327,48 @@ def trim_option_text(text: str):
     return f"{text[:97]}..."
 
 
+def duration_to_str(seconds: int):
+    if seconds == 0:
+        return "0 seconds"
+    s = seconds % 60
+    m = seconds // 60
+    message = ""
+    if m > 0:
+        message += f"{m} minutes" if m > 1 else "1 minute"
+    if s > 0:
+        if message:
+            message += " "
+        message += f"{s} seconds" if s > 1 else "1 second"
+    return message
+
+
+def iso8601_to_unix_timestamp(text: str) -> int | None:
+    match = re.match(r"PT((?P<h>\d+)H)?((?P<m>\d+)M)?((?P<s>\d+)S)?", text)
+    if not match:
+        return None
+    result = 0
+    h = match["h"]
+    m = match["m"]
+    s = match["s"]
+    if h is not None:
+        result += int(h) * 3600
+    if m is not None:
+        result += int(m) * 60
+    if s is not None:
+        result += int(s)
+    return result
+
+
+class SearchEntry:
+    def __init__(
+        self, name: str, url: str, on_select_content: str, duration: int | None
+    ) -> None:
+        self.name = name
+        self.url = url
+        self.on_select_content = on_select_content
+        self.duration = duration
+
+
 class Audio(discord.ext.commands.Cog):
     def __init__(
         self,
@@ -441,7 +484,7 @@ class Audio(discord.ext.commands.Cog):
         if validators.url(query):
             await self.__enqueue(await self.__voice_client(interaction), query)
             await interaction.response.send_message(
-                "Enqueued.", ephemeral=True, delete_after=5
+                query, ephemeral=True, delete_after=5
             )
             return
 
@@ -457,51 +500,32 @@ class Audio(discord.ext.commands.Cog):
             .execute
         )
 
-        select = SelectTrack()
-
-        def option_label(index: int, entry: dict) -> str:
-            return trim_option_text(
-                f"{index + 1}. {html.unescape(entry["snippet"]["title"])}"
+        details = await asyncio.to_thread(
+            self.youtube_client.videos()
+            .list(
+                part="snippet, contentDetails",
+                id=",".join([e["id"]["videoId"] for e in response["items"]]),
             )
-
-        entries: list[Dict] = []
-        for entry in response["items"]:
-            if len(entries) >= 10:
-                break
-            if entry["id"]["kind"] == "youtube#video":
-                entries.append(entry)
-
-        for index, entry in enumerate(entries):
-            print(option_label(index, entry))
-            select.add_option(label=option_label(index, entry))
-
-        if not entries:
-            await interaction.response.send_message("No results", ephemeral=True)
-            return
-
-        view = discord.ui.View()
-        view.add_item(select)
-        await interaction.response.send_message(
-            "Pick an audio track.", view=view, ephemeral=True, delete_after=30
+            .execute
         )
 
-        async def on_selected(selection_interaction: discord.Interaction):
-            item = [
-                entry
-                for index, entry in enumerate(entries)
-                if option_label(index, entry) == select.selected_value()
-            ][0]
-
-            await self.__enqueue(
-                await self.__voice_client(interaction),
-                f"https://youtube.com/watch?v={item["id"]["videoId"]}",
-            )
-            await selection_interaction.response.send_message(
-                "Enqueued.", ephemeral=True, delete_after=5
-            )
-            await interaction.delete_original_response()
-
-        select.set_callback(on_selected)
+        entries: list[SearchEntry] = []
+        for entry in details["items"]:
+            if len(entries) >= 10:
+                break
+            if entry["kind"] == "youtube#video":
+                video_url = f"https://youtube.com/watch?v={entry["id"]}"
+                entries.append(
+                    SearchEntry(
+                        name=html.unescape(entry["snippet"]["title"]),
+                        url=video_url,
+                        on_select_content=video_url,
+                        duration=iso8601_to_unix_timestamp(
+                            entry["contentDetails"]["duration"]
+                        ),
+                    )
+                )
+        await self.__search_result_select(interaction, entries)
 
     @discord.app_commands.describe(query="Search query.")
     async def jf(self, interaction: discord.Interaction, query: str) -> None:
@@ -516,37 +540,62 @@ class Audio(discord.ext.commands.Cog):
         print(f"[ ] jf {query}")
         result = await asyncio.to_thread(
             self.jellyfin_client.jellyfin.search_media_items,
-            media="Music",
+            media="Audio",
             term=query,
             parent_id=JELLYFIN_LIBRARY_ID,
         )
 
-        select = SelectTrack()
-
-        def option_label(index: int, entry: dict) -> str:
-            artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
-            return trim_option_text(f"{index + 1}. {artist_name} - {entry["Name"]}")
-
-        entries: list[Dict] = []
+        entries: list[SearchEntry] = []
         for entry in result["Items"]:
             if len(entries) >= 10:
                 break
-            if entry["Type"] == "Audio":
-                entries.append(entry)
+            if entry["Type"] != "Audio":
+                continue
+            artist_name = (
+                entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
+            )
+            name = f"{artist_name} - {entry["Name"]}"
+            entries.append(
+                SearchEntry(
+                    name=name,
+                    url=jellyfin_client.jellyfin.download_url(entry["Id"]),
+                    on_select_content=name,
+                    duration=entry["RunTimeTicks"] // 10_000_000,
+                )
+            )
+        await self.__search_result_select(interaction, entries)
 
+    async def __search_result_select(
+        self, interaction: discord.Interaction, entries: list[SearchEntry]
+    ) -> None:
+        if not entries:
+            await interaction.response.send_message(
+                "No results.", ephemeral=True, delete_after=5
+            )
+            return
+
+        def option_label(index: int, entry: SearchEntry) -> str:
+            message = f"{index + 1}. {entry.name}"
+            return trim_option_text(message)
+
+        select = SelectTrack()
+        message = ""
         for index, entry in enumerate(entries):
             print(option_label(index, entry))
-            select.add_option(label=option_label(index, entry))
-
-        if not entries:
-            await interaction.response.send_message("No results", ephemeral=True)
-            return
+            message += f"{option_label(index, entry)}"
+            if entry.duration:
+                message += f" - {duration_to_str(entry.duration)}\n"
+            else:
+                message += "\n"
+            select.add_option(
+                label=option_label(index, entry),
+                description=(
+                    duration_to_str(entry.duration) if entry.duration else None
+                ),
+            )
 
         view = discord.ui.View()
         view.add_item(select)
-        await interaction.response.send_message(
-            "Pick an audio track.", view=view, ephemeral=True, delete_after=30
-        )
 
         async def on_selected(selection_interaction: discord.Interaction):
             item = [
@@ -554,17 +603,17 @@ class Audio(discord.ext.commands.Cog):
                 for index, entry in enumerate(entries)
                 if option_label(index, entry) == select.selected_value()
             ][0]
-
             await self.__enqueue(
-                await self.__voice_client(selection_interaction),
-                jellyfin_client.jellyfin.download_url(item["Id"]),
+                await self.__voice_client(selection_interaction), item.url
             )
-            await selection_interaction.response.send_message(
-                "Enqueued.", ephemeral=True, delete_after=5
+            await interaction.edit_original_response(
+                content=f"{item.on_select_content}", view=None
             )
-            await selection_interaction.delete_original_response()
 
         select.set_callback(on_selected)
+        await interaction.response.send_message(
+            f"```{message}```", view=view, ephemeral=True, delete_after=30
+        )
 
     @discord.ext.commands.command()
     async def sync(self, ctx: discord.ext.commands.Context) -> None:
