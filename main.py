@@ -342,6 +342,7 @@ class GuildState:
         self._source: YTDLSource | None = None
         self._is_playing = False
         self._volume = 0.1
+        self._queue_lock = asyncio.Lock()
 
     async def enqueue(
         self,
@@ -349,52 +350,55 @@ class GuildState:
         url: str,
         options: PlaybackOptions,
     ) -> None:
-        await self._queue.add(url, options)
-        if self._is_playing:
-            return
-        print("[ ] voice client not playing, starting")
-        self._is_playing = True
-        self._source = await asyncio.to_thread(
-            lambda: YTDLSource(
-                self._queue,
-                self._volume,
-                self._executor,
+        async with self._queue_lock:
+            await self._queue.add(url, options)
+            if self._is_playing:
+                return
+            print("[ ] voice client not playing, starting")
+            self._is_playing = True
+            self._source = await asyncio.to_thread(
+                lambda: YTDLSource(
+                    self._queue,
+                    self._volume,
+                    self._executor,
+                )
             )
-        )
 
-        def finalizer(self, err):
-            if err:
-                print(f"[!] player error: {err}")
-            else:
-                print("[ ] finished playing")
-                self._is_playing = False
+            def finalizer(self, err):
+                if err:
+                    print(f"[!] player error: {err}")
+                else:
+                    print("[ ] finished playing")
+                    self._is_playing = False
 
-        voice_client.play(
-            self._source,
-            signal_type="music",
-            bitrate=AUDIO_BITRATE,
-            fec=False,
-            # fec=True,
-            # expected_packet_loss=0.05,
-            after=lambda err: finalizer(self, err),
-        )
+            voice_client.play(
+                self._source,
+                signal_type="music",
+                bitrate=AUDIO_BITRATE,
+                fec=False,
+                # fec=True,
+                # expected_packet_loss=0.05,
+                after=lambda err: finalizer(self, err),
+            )
 
-        print("[ ] play started")
+            print("[ ] play started")
 
     async def skip(self) -> None:
-        if self._source is not None and self._source.buffered_audio:
-            self._source.buffered_audio.drain()
-        if self._queue:
-            await self._queue.skip()
+        async with self._queue_lock:
+            if self._source is not None and self._source.buffered_audio:
+                self._source.buffered_audio.drain()
+            if self._queue:
+                await self._queue.skip()
 
     def is_playing(self) -> bool:
         return self._is_playing
 
-    def cleanup(self) -> None:
-        if self._source is not None:
-            self._source.cleanup()
-        self._queue.cleanup()
-        self._queue.clear()
+    async def cleanup(self) -> None:
+        async with self._queue_lock:
+            if self._source is not None:
+                self._source.cleanup()
+            self._queue.cleanup()
+            self._queue.clear()
 
     def set_volume(self, value: float) -> None:
         self._volume = value
@@ -513,7 +517,7 @@ class Audio(discord.ext.commands.Cog):
                 and member.guild.id in self.state
                 and not after.channel
             ):
-                self.state[member.guild.id].cleanup()
+                await self.state[member.guild.id].cleanup()
                 del self.state[member.guild.id]
 
             if before.channel is None:
@@ -732,56 +736,61 @@ class Audio(discord.ext.commands.Cog):
         view = discord.ui.View()
         view.add_item(select)
 
+        dismissed_lock = asyncio.Lock()
         dismissed = False
 
-        async def on_selected(selection_interaction: discord.Interaction):
+        async def edit_original_response(item: SearchEntry) -> None:
+            embed: discord.Embed | None = discord.utils.MISSING
+            attachments: Sequence[discord.File] = []
+            if item.on_select_message.artwork_url:
+                async with await self.http.get(
+                    item.on_select_message.artwork_url
+                ) as image:
+                    if image.ok:
+                        content = await image.content.read()
+                        attachments = [
+                            discord.File(
+                                io.BytesIO(content),
+                                filename="artwork.jpg",
+                            )
+                        ]
+                        embed = discord.Embed()
+                        embed.set_image(url="attachment://artwork.jpg")
+
+            await interaction.edit_original_response(
+                content=f"{item.on_select_message.content}{f" ({options})" if options else ""}",
+                embed=embed,
+                attachments=attachments,
+                view=None,
+            )
+
+        async def on_selected(selection_interaction: discord.Interaction) -> None:
             if interaction.user.id != selection_interaction.user.id:
                 await selection_interaction.response.send_message(
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
                 return
-            nonlocal dismissed
-            dismissed = True
-            try:
-                item = [
-                    entry
-                    for index, entry in enumerate(entries)
-                    if trim_option_text(option_label(index, entry))
-                    == select.selected_value()
-                ][0]
-                await self.__enqueue(
-                    await self.__voice_client(selection_interaction),
-                    item.url,
-                    options=options,
-                )
-                embed: discord.Embed | None = discord.utils.MISSING
-                attachments: Sequence[discord.File] = []
-                if item.on_select_message.artwork_url:
-                    async with await self.http.get(
-                        item.on_select_message.artwork_url
-                    ) as image:
-                        if image.ok:
-                            content = await image.content.read()
-                            attachments = [
-                                discord.File(
-                                    io.BytesIO(content),
-                                    filename="artwork.jpg",
-                                )
-                            ]
-                            embed = discord.Embed()
-                            embed.set_image(url="attachment://artwork.jpg")
-
-                await interaction.edit_original_response(
-                    content=f"{item.on_select_message.content}{f" ({options})" if options else ""}",
-                    embed=embed,
-                    attachments=attachments,
-                    view=None,
-                )
-            except discord.DiscordException as e:
-                print(f"[ ] Interaction error: {e}")
-                dismissed = False
-                await interaction.edit_original_response(view=view)
-                return
+            async with dismissed_lock:
+                nonlocal dismissed
+                if dismissed:
+                    return
+                try:
+                    item = [
+                        entry
+                        for index, entry in enumerate(entries)
+                        if trim_option_text(option_label(index, entry))
+                        == select.selected_value()
+                    ][0]
+                    await self.__enqueue(
+                        await self.__voice_client(selection_interaction),
+                        item.url,
+                        options=options,
+                    )
+                    await edit_original_response(item)
+                    dismissed = True
+                except discord.DiscordException as e:
+                    print(f"[ ] Interaction error: {e}")
+                    await interaction.edit_original_response(view=view)
 
         select.set_callback(on_selected)
         await interaction.response.send_message(
@@ -789,8 +798,10 @@ class Audio(discord.ext.commands.Cog):
             view=view,
         )
         await asyncio.sleep(30)
-        if not dismissed:
-            await interaction.delete_original_response()
+        async with dismissed_lock:
+            if not dismissed:
+                await interaction.delete_original_response()
+                dismissed = True
 
     @discord.ext.commands.command()
     async def sync(self, ctx: discord.ext.commands.Context) -> None:
