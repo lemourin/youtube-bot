@@ -49,9 +49,8 @@ class YTDLBuffer(io.BufferedIOBase):
 
     def cleanup(self) -> None:
         print("[ ] YTDLBuffer cleanup")
-        if self.proc is not None:
-            self.proc.terminate()
-            print("[ ] process cleaned up")
+        self.proc.terminate()
+        print("[ ] process cleaned up")
 
     @staticmethod
     def __create_process(url: str) -> subprocess.Popen[bytes]:
