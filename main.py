@@ -597,20 +597,19 @@ class Audio(discord.ext.commands.Cog):
             return
 
         def option_label(index: int, entry: SearchEntry) -> str:
-            message = f"{index + 1}. {entry.name}"
-            return trim_option_text(message)
+            return f"{index + 1}. {entry.name}"
 
         select = SelectTrack()
         message = ""
         for index, entry in enumerate(entries):
-            print(option_label(index, entry))
+            print(f"[ ] search result: {option_label(index, entry)}")
             message += f"{option_label(index, entry)}"
             if entry.duration:
                 message += f" - {duration_to_str(entry.duration)}\n"
             else:
                 message += "\n"
             select.add_option(
-                label=option_label(index, entry),
+                label=trim_option_text(option_label(index, entry)),
                 description=(
                     duration_to_str(entry.duration) if entry.duration else None
                 ),
@@ -633,7 +632,8 @@ class Audio(discord.ext.commands.Cog):
                 item = [
                     entry
                     for index, entry in enumerate(entries)
-                    if option_label(index, entry) == select.selected_value()
+                    if trim_option_text(option_label(index, entry))
+                    == select.selected_value()
                 ][0]
                 await self.__enqueue(
                     await self.__voice_client(selection_interaction), item.url
@@ -672,7 +672,7 @@ class Audio(discord.ext.commands.Cog):
             f"```{message}```",
             view=view,
         )
-        await asyncio.sleep(10)
+        await asyncio.sleep(30)
         if not dismissed:
             await interaction.delete_original_response()
 
