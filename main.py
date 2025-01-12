@@ -450,10 +450,11 @@ def jf_best_thumbnail_url(client: JellyfinClient, item: dict) -> str | None:
     for index, e in enumerate(reversed(priority)):
         priority_map[e] = index
 
-    artwork_name = max(
-        item["ImageBlurHashes"].keys(),
-        key=lambda x: priority_map.get(x, -1),
-    )
+    keys = item["ImageBlurHashes"].keys()
+    if len(keys) == 0:
+        return None
+
+    artwork_name = max(keys, key=lambda x: priority_map.get(x, -1))
     return client.jellyfin.artwork(
         item["AlbumId"],
         art=artwork_name,
