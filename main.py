@@ -40,7 +40,7 @@ AUDIO_BITRATE = 320
 
 class YTDLBuffer(io.BufferedIOBase):
     def __init__(self, url: str) -> None:
-        self.proc: subprocess.Popen[bytes] = YTDLBuffer.__create_process(url)
+        self.proc = YTDLBuffer.__create_process(url)
 
     def read(self, n: int | None = None) -> bytes:
         # print("[ ] YTDLBuffer read")
@@ -77,10 +77,42 @@ class YTDLBuffer(io.BufferedIOBase):
         )
 
 
+class PlaybackOptions:
+    def __init__(self, nightcore_factor: float | None = None) -> None:
+        self.nightcore_factor = nightcore_factor
+
+    def __bool__(self) -> bool:
+        return self.nightcore_factor is not None
+
+    def __str__(self) -> str:
+        if self.nightcore_factor is None:
+            return ""
+        return f"nightcore_factor = {self.nightcore_factor}"
+
+
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, options: PlaybackOptions) -> None:
         self.buffer = YTDLBuffer(url)
-        super().__init__(self.buffer, pipe=True, options="-vn")
+        ffmpeg_options = "-vn"
+        if options.nightcore_factor:
+            probe = self.__probe(url)
+            sample_rate = 44100
+            for stream in probe["streams"]:
+                if stream["codec_type"] == "audio":
+                    sample_rate = int(stream["sample_rate"])
+                    break
+            ffmpeg_options += f" -af asetrate={sample_rate * options.nightcore_factor}"
+        super().__init__(self.buffer, pipe=True, options=ffmpeg_options)
+
+    def __probe(self, url: str) -> dict:
+        with subprocess.Popen(
+            executable="ffprobe",
+            args=["-i", url, "-v", "quiet", "-print_format", "json", "-show_streams"],
+            stdout=asyncio.subprocess.PIPE,
+            bufsize=0,
+        ) as process:
+            assert process.stdout
+            return json.loads(process.stdout.read())
 
     def cleanup(self) -> None:
         print("[ ] YTDLStreamAudio cleanup")
@@ -89,13 +121,14 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
 
 
 class LazyAudioSource(discord.AudioSource):
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, options: PlaybackOptions) -> None:
         self.url = url
         self.source: discord.AudioSource | None = None
+        self.options = options
 
     def prefetch(self) -> None:
         if self.source is None:
-            self.source = YTDLStreamAudio(self.url)
+            self.source = YTDLStreamAudio(self.url, self.options)
 
     def cleanup(self) -> None:
         if self.source:
@@ -114,9 +147,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
-    async def add(self, url: str) -> None:
+    async def add(self, url: str, options: PlaybackOptions) -> None:
         print(f"[ ] adding {url} to queue")
-        self.queue.append(LazyAudioSource(url))
+        self.queue.append(LazyAudioSource(url, options))
         if len(self.queue) == 2:
             e = self.queue[1]
             await asyncio.to_thread(e.prefetch)
@@ -270,8 +303,13 @@ class GuildState:
         self._is_playing = False
         self._volume = 0.1
 
-    async def enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
-        await self._queue.add(url)
+    async def enqueue(
+        self,
+        voice_client: discord.VoiceClient,
+        url: str,
+        options: PlaybackOptions,
+    ) -> None:
+        await self._queue.add(url, options)
         if self._is_playing:
             return
         print("[ ] voice client not playing, starting")
@@ -498,13 +536,26 @@ class Audio(discord.ext.commands.Cog):
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
 
-    @discord.app_commands.describe(query="Either a url or a search query.")
-    async def yt(self, interaction: discord.Interaction, query: str) -> None:
+    @discord.app_commands.describe(
+        query="Either a url or a search query.",
+        nightcore_factor="Factor of how much to speed up the audio.",
+    )
+    async def yt(
+        self,
+        interaction: discord.Interaction,
+        query: str,
+        nightcore_factor: float | None,
+    ) -> None:
         print("[ ] yt app command")
+        options = PlaybackOptions(nightcore_factor=nightcore_factor)
         if validators.url(query):
-            await self.__enqueue(await self.__voice_client(interaction), query)
+            await self.__enqueue(
+                await self.__voice_client(interaction),
+                query,
+                options=options,
+            )
             await interaction.response.send_message(
-                query, ephemeral=True, delete_after=5
+                f"{query}{f"({options})" if options else ""}",
             )
             return
 
@@ -545,10 +596,18 @@ class Audio(discord.ext.commands.Cog):
                         ),
                     )
                 )
-        await self.__search_result_select(interaction, entries)
+        await self.__search_result_select(interaction, entries, options)
 
-    @discord.app_commands.describe(query="Search query.")
-    async def jf(self, interaction: discord.Interaction, query: str) -> None:
+    @discord.app_commands.describe(
+        query="Search query.",
+        nightcore_factor="Factor of how much to speed up the audio.",
+    )
+    async def jf(
+        self,
+        interaction: discord.Interaction,
+        query: str,
+        nightcore_factor: float | None,
+    ) -> None:
         if self.jellyfin_client is None:
             await interaction.response.send_message(
                 "Jellyfin not set up.", ephemeral=True
@@ -585,10 +644,15 @@ class Audio(discord.ext.commands.Cog):
                     duration=entry["RunTimeTicks"] // 10_000_000,
                 )
             )
-        await self.__search_result_select(interaction, entries)
+        await self.__search_result_select(
+            interaction, entries, PlaybackOptions(nightcore_factor=nightcore_factor)
+        )
 
     async def __search_result_select(
-        self, interaction: discord.Interaction, entries: list[SearchEntry]
+        self,
+        interaction: discord.Interaction,
+        entries: list[SearchEntry],
+        options: PlaybackOptions,
     ) -> None:
         if not entries:
             await interaction.response.send_message(
@@ -636,7 +700,9 @@ class Audio(discord.ext.commands.Cog):
                     == select.selected_value()
                 ][0]
                 await self.__enqueue(
-                    await self.__voice_client(selection_interaction), item.url
+                    await self.__voice_client(selection_interaction),
+                    item.url,
+                    options=options,
                 )
                 embed: discord.Embed | None = discord.utils.MISSING
                 attachments: Sequence[discord.File] = []
@@ -656,7 +722,7 @@ class Audio(discord.ext.commands.Cog):
                             embed.set_image(url="attachment://artwork.jpg")
 
                 await interaction.edit_original_response(
-                    content=item.on_select_message.content,
+                    content=f"{item.on_select_message.content}{f" ({options})" if options else ""}",
                     embed=embed,
                     attachments=attachments,
                     view=None,
@@ -790,9 +856,14 @@ class Audio(discord.ext.commands.Cog):
         self.state[guild_id] = state
         return state
 
-    async def __enqueue(self, voice_client: discord.VoiceClient, url: str) -> None:
+    async def __enqueue(
+        self,
+        voice_client: discord.VoiceClient,
+        url: str,
+        options: PlaybackOptions,
+    ) -> None:
         state = self.__guild_state(voice_client.guild.id)
-        await state.enqueue(voice_client, url)
+        await state.enqueue(voice_client, url, options)
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
