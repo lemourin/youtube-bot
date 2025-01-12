@@ -76,22 +76,49 @@ class YTDLBuffer(io.BufferedIOBase):
 
 
 class PlaybackOptions:
-    def __init__(self, nightcore_factor: float | None = None) -> None:
+    def __init__(
+        self,
+        nightcore_factor: float | None = None,
+        bassboost_factor: float | None = None,
+    ) -> None:
         self.nightcore_factor = nightcore_factor
+        self.bassboost_factor = bassboost_factor
 
     def __bool__(self) -> bool:
-        return self.nightcore_factor is not None
+        return self.nightcore_factor is not None or self.bassboost_factor is not None
 
     def __str__(self) -> str:
-        if self.nightcore_factor is None:
+        if not self:
             return ""
-        return f"nightcore_factor = {self.nightcore_factor}"
+        message = ""
+
+        def append(text: str):
+            nonlocal message
+            if len(message) > 0:
+                message += ", "
+            message += text
+
+        if self.nightcore_factor is not None:
+            append(f"nightcore_factor = {self.nightcore_factor}")
+        if self.bassboost_factor is not None:
+            append(f"bassboost_factor = {self.bassboost_factor}")
+        return message
 
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
     def __init__(self, url: str, options: PlaybackOptions) -> None:
         self.buffer = YTDLBuffer(url)
-        ffmpeg_options = "-vn"
+
+        ffmpeg_options = ""
+
+        def append(opt: str):
+            nonlocal ffmpeg_options
+            if not ffmpeg_options:
+                ffmpeg_options = "-af "
+            else:
+                ffmpeg_options += ","
+            ffmpeg_options += opt
+
         if options.nightcore_factor:
             probe = self.__probe(url)
             sample_rate = 44100
@@ -99,8 +126,12 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
                 if stream["codec_type"] == "audio":
                     sample_rate = int(stream["sample_rate"])
                     break
-            ffmpeg_options += f" -af asetrate={sample_rate * options.nightcore_factor}"
-        super().__init__(self.buffer, pipe=True, options=ffmpeg_options)
+            append(f"asetrate={sample_rate * options.nightcore_factor}")
+        if options.bassboost_factor:
+            append(f"bass=g={options.bassboost_factor}")
+        super().__init__(
+            self.buffer, pipe=True, options=f"-vn -loglevel error {ffmpeg_options}"
+        )
 
     def __probe(self, url: str) -> dict:
         with YTDLBuffer.create_process(url) as input_process, subprocess.Popen(
@@ -114,6 +145,8 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
                 "json",
                 "-show_streams",
                 "-hide_banner",
+                "-loglevel",
+                "error",
             ],
             stdin=input_process.stdout,
             stdout=asyncio.subprocess.PIPE,
@@ -545,16 +578,20 @@ class Audio(discord.ext.commands.Cog):
 
     @discord.app_commands.describe(
         query="Either a url or a search query.",
-        nightcore_factor="Factor of how much to speed up the audio.",
+        nightcore_factor="Factor of how much to speed up the audio. [0.5, 1.5]",
+        bassboost_factor="Factor of how much to bassboost the audio. [-10, 10]",
     )
     async def yt(
         self,
         interaction: discord.Interaction,
         query: str,
         nightcore_factor: float | None,
+        bassboost_factor: float | None,
     ) -> None:
         print("[ ] yt app command")
-        options = PlaybackOptions(nightcore_factor=nightcore_factor)
+        options = PlaybackOptions(
+            nightcore_factor=nightcore_factor, bassboost_factor=bassboost_factor
+        )
         if validators.url(query):
             await self.__enqueue(
                 await self.__voice_client(interaction),
@@ -607,13 +644,15 @@ class Audio(discord.ext.commands.Cog):
 
     @discord.app_commands.describe(
         query="Search query.",
-        nightcore_factor="Factor of how much to speed up the audio.",
+        nightcore_factor="Factor of how much to speed up the audio. [0.5, 1.5]",
+        bassboost_factor="Factor of how much to bassboost the audio. [-10, 10]",
     )
     async def jf(
         self,
         interaction: discord.Interaction,
         query: str,
         nightcore_factor: float | None,
+        bassboost_factor: float | None,
     ) -> None:
         if self.jellyfin_client is None:
             await interaction.response.send_message(
@@ -652,7 +691,11 @@ class Audio(discord.ext.commands.Cog):
                 )
             )
         await self.__search_result_select(
-            interaction, entries, PlaybackOptions(nightcore_factor=nightcore_factor)
+            interaction,
+            entries,
+            PlaybackOptions(
+                nightcore_factor=nightcore_factor, bassboost_factor=bassboost_factor
+            ),
         )
 
     async def __search_result_select(
