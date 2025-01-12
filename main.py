@@ -5,7 +5,7 @@
 import asyncio
 import subprocess
 import threading
-from typing import cast, Callable, Awaitable, Dict, Any, Sequence, Union
+from typing import cast, Callable, Awaitable, Dict, Any, Tuple
 import os
 import io
 import sys
@@ -76,6 +76,9 @@ class YTDLBuffer(io.BufferedIOBase):
 
 
 class PlaybackOptions:
+    NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
+    BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
+
     def __init__(
         self,
         nightcore_factor: float | None = None,
@@ -88,20 +91,11 @@ class PlaybackOptions:
         return self.nightcore_factor is not None or self.bassboost_factor is not None
 
     def __str__(self) -> str:
-        if not self:
-            return ""
         message = ""
-
-        def append(text: str):
-            nonlocal message
-            if len(message) > 0:
-                message += ", "
-            message += text
-
-        if self.nightcore_factor is not None:
-            append(f"nightcore_factor = {self.nightcore_factor}")
-        if self.bassboost_factor is not None:
-            append(f"bassboost_factor = {self.bassboost_factor}")
+        if self.nightcore_factor:
+            message += f"* nightcore_factor = {self.nightcore_factor}\n"
+        if self.bassboost_factor:
+            message += f"* bassboost_factor = {self.bassboost_factor}\n"
         return message
 
 
@@ -460,14 +454,33 @@ def jf_best_thumbnail_url(client: JellyfinClient, item: dict) -> str | None:
     )
 
 
+def yt_best_thumbnail_url(item: dict) -> str | None:
+    return max(item["snippet"]["thumbnails"].values(), key=lambda e: e["height"])["url"]
+
+
+def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
+    if options.nightcore_factor:
+        embed.add_field(name="nightcore_factor", value=options.nightcore_factor)
+    if options.bassboost_factor:
+        embed.add_field(name="bassboost_factor", value=options.bassboost_factor)
+
+
 class MessageContent:
     def __init__(
         self,
         content: str | None = discord.utils.MISSING,
+        url: str | None = None,
         artwork_url: str | None = None,
+        color: discord.Color | None = None,
+        author_name: str | None = None,
+        author_url: str | None = None,
     ):
         self.content = content
+        self.url = url
         self.artwork_url = artwork_url
+        self.color = color
+        self.author_name = author_name
+        self.author_url = author_url
 
 
 class SearchEntry:
@@ -582,8 +595,8 @@ class Audio(discord.ext.commands.Cog):
 
     @discord.app_commands.describe(
         query="Either a url or a search query.",
-        nightcore_factor="Factor of how much to speed up the audio. [0.5, 1.5]",
-        bassboost_factor="Factor of how much to bassboost the audio. [-10, 10]",
+        nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
+        bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
     )
     async def yt(
         self,
@@ -603,7 +616,7 @@ class Audio(discord.ext.commands.Cog):
                 options=options,
             )
             await interaction.response.send_message(
-                f"{query}{f" ({options})" if options else ""}",
+                content=f"{query}{f"\n{options}" if options else ""}"
             )
             return
 
@@ -633,12 +646,20 @@ class Audio(discord.ext.commands.Cog):
             if len(entries) >= 10:
                 break
             if entry["kind"] == "youtube#video":
+                title = html.unescape(entry["snippet"]["title"])
                 video_url = f"https://youtube.com/watch?v={entry["id"]}"
                 entries.append(
                     SearchEntry(
-                        name=html.unescape(entry["snippet"]["title"]),
+                        name=title,
                         url=video_url,
-                        on_select_message=MessageContent(content=video_url),
+                        on_select_message=MessageContent(
+                            content=title,
+                            url=video_url,
+                            artwork_url=yt_best_thumbnail_url(entry),
+                            color=discord.Color.red(),
+                            author_name=entry["snippet"]["channelTitle"],
+                            author_url=f"https://youtube.com/channel/{entry["snippet"]["channelId"]}",
+                        ),
                         duration=iso8601_to_unix_timestamp(
                             entry["contentDetails"]["duration"]
                         ),
@@ -648,8 +669,8 @@ class Audio(discord.ext.commands.Cog):
 
     @discord.app_commands.describe(
         query="Search query.",
-        nightcore_factor="Factor of how much to speed up the audio. [0.5, 1.5]",
-        bassboost_factor="Factor of how much to bassboost the audio. [-10, 10]",
+        nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
+        bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
     )
     async def jf(
         self,
@@ -688,8 +709,10 @@ class Audio(discord.ext.commands.Cog):
                     name=name,
                     url=jellyfin_client.jellyfin.download_url(entry["Id"]),
                     on_select_message=MessageContent(
-                        content=name,
+                        content=entry["Name"],
                         artwork_url=jf_best_thumbnail_url(self.jellyfin_client, entry),
+                        author_name=artist_name,
+                        color=discord.Color.blue(),
                     ),
                     duration=entry["RunTimeTicks"] // 10_000_000,
                 )
@@ -701,6 +724,28 @@ class Audio(discord.ext.commands.Cog):
                 nightcore_factor=nightcore_factor, bassboost_factor=bassboost_factor
             ),
         )
+
+    async def __create_embed(
+        self, item: SearchEntry, options: PlaybackOptions
+    ) -> Tuple[discord.Embed, discord.File]:
+        assert item.on_select_message.artwork_url
+        async with await self.http.get(item.on_select_message.artwork_url) as image:
+            image.raise_for_status()
+            embed = discord.Embed(
+                title=item.on_select_message.content,
+                url=item.on_select_message.url,
+                color=item.on_select_message.color,
+            )
+            embed.set_author(
+                name=item.on_select_message.author_name,
+                url=item.on_select_message.author_url,
+            )
+            embed.set_image(url="attachment://artwork.jpg")
+            add_to_embed(embed, options)
+            return embed, discord.File(
+                io.BytesIO(await image.content.read()),
+                filename="artwork.jpg",
+            )
 
     async def __search_result_select(
         self,
@@ -740,29 +785,19 @@ class Audio(discord.ext.commands.Cog):
         dismissed = False
 
         async def edit_original_response(item: SearchEntry) -> None:
-            embed: discord.Embed | None = discord.utils.MISSING
-            attachments: Sequence[discord.File] = []
             if item.on_select_message.artwork_url:
-                async with await self.http.get(
-                    item.on_select_message.artwork_url
-                ) as image:
-                    if image.ok:
-                        content = await image.content.read()
-                        attachments = [
-                            discord.File(
-                                io.BytesIO(content),
-                                filename="artwork.jpg",
-                            )
-                        ]
-                        embed = discord.Embed()
-                        embed.set_image(url="attachment://artwork.jpg")
-
-            await interaction.edit_original_response(
-                content=f"{item.on_select_message.content}{f" ({options})" if options else ""}",
-                embed=embed,
-                attachments=attachments,
-                view=None,
-            )
+                embed, attachment = await self.__create_embed(item, options)
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=embed,
+                    attachments=[attachment],
+                    view=None,
+                )
+            else:
+                await interaction.edit_original_response(
+                    content=f"{item.on_select_message.content}{f"\n{options}" if options else ""}",
+                    view=None,
+                )
 
         async def on_selected(selection_interaction: discord.Interaction) -> None:
             if interaction.user.id != selection_interaction.user.id:
