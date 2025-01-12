@@ -78,14 +78,17 @@ class YTDLBuffer(io.BufferedIOBase):
 class PlaybackOptions:
     NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
     BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
+    FILTER_GRAPH_DOC = "Custom ffmpeg audio filtering graph."
 
     def __init__(
         self,
         nightcore_factor: float | None = None,
         bassboost_factor: float | None = None,
+        filter_graph: str | None = None,
     ) -> None:
         self.nightcore_factor = nightcore_factor
         self.bassboost_factor = bassboost_factor
+        self.filter_graph = filter_graph
 
     def __bool__(self) -> bool:
         return self.nightcore_factor is not None or self.bassboost_factor is not None
@@ -96,6 +99,8 @@ class PlaybackOptions:
             message += f"* nightcore_factor = {self.nightcore_factor}\n"
         if self.bassboost_factor:
             message += f"* bassboost_factor = {self.bassboost_factor}\n"
+        if self.filter_graph:
+            message += f"* filter_graph = {self.filter_graph}"
         return message
 
 
@@ -123,6 +128,8 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
             append(f"asetrate={sample_rate * options.nightcore_factor}")
         if options.bassboost_factor:
             append(f"bass=g={options.bassboost_factor}")
+        if options.filter_graph:
+            append(options.filter_graph)
         super().__init__(
             self.buffer, pipe=True, options=f"-vn -loglevel error {ffmpeg_options}"
         )
@@ -463,6 +470,8 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
         embed.add_field(name="nightcore_factor", value=options.nightcore_factor)
     if options.bassboost_factor:
         embed.add_field(name="bassboost_factor", value=options.bassboost_factor)
+    if options.filter_graph:
+        embed.add_field(name="filter_graph", value=options.filter_graph)
 
 
 class MessageContent:
@@ -597,6 +606,7 @@ class Audio(discord.ext.commands.Cog):
         query="Either a url or a search query.",
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
+        filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
     )
     async def yt(
         self,
@@ -604,10 +614,14 @@ class Audio(discord.ext.commands.Cog):
         query: str,
         nightcore_factor: float | None,
         bassboost_factor: float | None,
+        filter_graph: str | None,
     ) -> None:
         print("[ ] yt app command")
+        await self.__authorize_options(interaction, filter_graph)
         options = PlaybackOptions(
-            nightcore_factor=nightcore_factor, bassboost_factor=bassboost_factor
+            nightcore_factor=nightcore_factor,
+            bassboost_factor=bassboost_factor,
+            filter_graph=filter_graph,
         )
         if validators.url(query):
             await self.__enqueue(
@@ -671,6 +685,7 @@ class Audio(discord.ext.commands.Cog):
         query="Search query.",
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
+        filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
     )
     async def jf(
         self,
@@ -678,7 +693,10 @@ class Audio(discord.ext.commands.Cog):
         query: str,
         nightcore_factor: float | None,
         bassboost_factor: float | None,
+        filter_graph: str | None,
     ) -> None:
+        await self.__authorize_options(interaction, filter_graph)
+
         if self.jellyfin_client is None:
             await interaction.response.send_message(
                 "Jellyfin not set up.", ephemeral=True
@@ -721,9 +739,22 @@ class Audio(discord.ext.commands.Cog):
             interaction,
             entries,
             PlaybackOptions(
-                nightcore_factor=nightcore_factor, bassboost_factor=bassboost_factor
+                nightcore_factor=nightcore_factor,
+                bassboost_factor=bassboost_factor,
+                filter_graph=filter_graph,
             ),
         )
+
+    async def __authorize_options(
+        self, interaction: discord.Interaction, filter_graph: str | None
+    ):
+        if interaction.user.id != DISCORD_ADMIN_ID and filter_graph:
+            await interaction.response.send_message(
+                "Not allowed to use the filter_graph option.", ephemeral=True
+            )
+            raise discord.ext.commands.CommandError(
+                "not authorized to use filter_graph option"
+            )
 
     async def __create_embed(
         self, item: SearchEntry, options: PlaybackOptions
