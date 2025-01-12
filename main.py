@@ -40,7 +40,7 @@ AUDIO_BITRATE = 320
 
 class YTDLBuffer(io.BufferedIOBase):
     def __init__(self, url: str) -> None:
-        self.proc = YTDLBuffer.__create_process(url)
+        self.proc = YTDLBuffer.create_process(url)
 
     def read(self, n: int | None = None) -> bytes:
         # print("[ ] YTDLBuffer read")
@@ -53,7 +53,7 @@ class YTDLBuffer(io.BufferedIOBase):
         print("[ ] process cleaned up")
 
     @staticmethod
-    def __create_process(url: str) -> subprocess.Popen[bytes]:
+    def create_process(url: str) -> subprocess.Popen[bytes]:
         print(f"[ ] YTDLBuffer creating process for {url}")
         args = [
             "-x",
@@ -62,7 +62,6 @@ class YTDLBuffer(io.BufferedIOBase):
             # "bestaudio",
             "--cookies",
             "cookie.txt",
-            "--no-warnings",
             url,
             "-o",
             "-",
@@ -104,11 +103,20 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
         super().__init__(self.buffer, pipe=True, options=ffmpeg_options)
 
     def __probe(self, url: str) -> dict:
-        with subprocess.Popen(
+        with YTDLBuffer.create_process(url) as input_process, subprocess.Popen(
             executable="ffprobe",
-            args=["-i", url, "-v", "quiet", "-print_format", "json", "-show_streams"],
+            args=[
+                "-i",
+                "-",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-hide_banner",
+            ],
+            stdin=input_process.stdout,
             stdout=asyncio.subprocess.PIPE,
-            bufsize=0,
         ) as process:
             assert process.stdout
             return json.loads(process.stdout.read())
@@ -554,7 +562,7 @@ class Audio(discord.ext.commands.Cog):
                 options=options,
             )
             await interaction.response.send_message(
-                f"{query}{f"({options})" if options else ""}",
+                f"{query}{f" ({options})" if options else ""}",
             )
             return
 
