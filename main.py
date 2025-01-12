@@ -478,14 +478,14 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
 class MessageContent:
     def __init__(
         self,
-        content: str | None = discord.utils.MISSING,
+        title: str,
         url: str | None = None,
         artwork_url: str | None = None,
         color: discord.Color | None = None,
         author_name: str | None = None,
         author_url: str | None = None,
     ):
-        self.content = content
+        self.title = title
         self.url = url
         self.artwork_url = artwork_url
         self.color = color
@@ -668,7 +668,7 @@ class Audio(discord.ext.commands.Cog):
                         name=title,
                         url=video_url,
                         on_select_message=MessageContent(
-                            content=title,
+                            title=title,
                             url=video_url,
                             artwork_url=yt_best_thumbnail_url(entry),
                             color=discord.Color.red(),
@@ -728,7 +728,7 @@ class Audio(discord.ext.commands.Cog):
                     name=name,
                     url=jellyfin_client.jellyfin.download_url(entry["Id"]),
                     on_select_message=MessageContent(
-                        content=entry["Name"],
+                        title=entry["Name"],
                         artwork_url=jf_best_thumbnail_url(self.jellyfin_client, entry),
                         author_name=artist_name,
                         color=discord.Color.blue(),
@@ -764,7 +764,7 @@ class Audio(discord.ext.commands.Cog):
         async with await self.http.get(item.on_select_message.artwork_url) as image:
             image.raise_for_status()
             embed = discord.Embed(
-                title=item.on_select_message.content,
+                title=item.on_select_message.title,
                 url=item.on_select_message.url,
                 color=item.on_select_message.color,
             )
@@ -826,10 +826,13 @@ class Audio(discord.ext.commands.Cog):
                     view=None,
                 )
             else:
-                await interaction.edit_original_response(
-                    content=f"{item.on_select_message.content}{f"\n{options}" if options else ""}",
-                    view=None,
-                )
+                message = ""
+                if item.on_select_message.author_name:
+                    message += f"{item.on_select_message.author_name} - "
+                message += item.on_select_message.title
+                if options:
+                    message += f"\n{options}"
+                await interaction.edit_original_response(content=message, view=None)
 
         async def on_selected(selection_interaction: discord.Interaction) -> None:
             if interaction.user.id != selection_interaction.user.id:
