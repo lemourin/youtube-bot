@@ -5,17 +5,18 @@
 import asyncio
 import subprocess
 import threading
-from typing import cast, Callable, Awaitable, Dict, Any
+from typing import cast, Callable, Awaitable, Dict, Any, Sequence, Union
 import os
 import io
 import sys
 from concurrent.futures import Executor, ThreadPoolExecutor
+import re
+import json
 import logging
 import html
 import aiohttp
 import discord
 import discord.ext.commands
-import re
 from dotenv import load_dotenv
 import validators
 import googleapiclient.discovery
@@ -359,13 +360,45 @@ def iso8601_to_unix_timestamp(text: str) -> int | None:
     return result
 
 
+def jf_best_thumbnail_url(client: JellyfinClient, item: dict) -> str | None:
+    priority = ["Primary", "Backdrop", "Logo"]
+
+    priority_map: dict[str, int] = {}
+    for index, e in enumerate(reversed(priority)):
+        priority_map[e] = index
+
+    artwork_name = max(
+        item["ImageBlurHashes"].keys(),
+        key=lambda x: priority_map.get(x, -1),
+    )
+    return client.jellyfin.artwork(
+        item["AlbumId"],
+        art=artwork_name,
+        max_width=720,
+    )
+
+
+class MessageContent:
+    def __init__(
+        self,
+        content: str | None = discord.utils.MISSING,
+        artwork_url: str | None = None,
+    ):
+        self.content = content
+        self.artwork_url = artwork_url
+
+
 class SearchEntry:
     def __init__(
-        self, name: str, url: str, on_select_content: str, duration: int | None
+        self,
+        name: str,
+        url: str,
+        on_select_message: MessageContent,
+        duration: int | None = None,
     ) -> None:
         self.name = name
         self.url = url
-        self.on_select_content = on_select_content
+        self.on_select_message = on_select_message
         self.duration = duration
 
 
@@ -374,11 +407,13 @@ class Audio(discord.ext.commands.Cog):
         self,
         bot: discord.ext.commands.Bot,
         executor: Executor,
+        http: aiohttp.ClientSession,
         jellyfin_client: JellyfinClient | None = None,
         youtube_client: Any = None,
     ) -> None:
         self.bot = bot
         self.executor = executor
+        self.http = http
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
@@ -414,69 +449,54 @@ class Audio(discord.ext.commands.Cog):
             if bot_member.guild.voice_client is not None:
                 await bot_member.guild.voice_client.disconnect(force=False)
 
-        bot.tree.add_command(
+        for command in [
             discord.app_commands.Command(
                 name="yt",
                 description="Play audio of a YouTube video.",
                 callback=self.yt,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="jf",
                 description="Play audio of a video sourced from a Jellyfin server.",
                 callback=self.jf,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="join",
                 description="Add bot to the voice channel.",
                 callback=self.join,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="skip",
                 description="Skip currently playing audio.",
                 callback=self.skip,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="volume",
                 description="Change volume of the currently playing audio.",
                 callback=self.volume,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="stop",
                 description="Pause audio playback.",
                 callback=self.stop,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="leave",
                 description="Disconnect bot from the voice channel.",
                 callback=self.leave,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="die",
                 description="Kill the bot.",
                 callback=self.die,
-            )
-        )
-        bot.tree.add_command(
+            ),
             discord.app_commands.Command(
                 name="ping",
                 description="Ping.",
                 callback=self.ping,
-            )
-        )
+            ),
+        ]:
+            bot.tree.add_command(cast(discord.app_commands.Command, command))
 
     @discord.app_commands.describe(query="Either a url or a search query.")
     async def yt(self, interaction: discord.Interaction, query: str) -> None:
@@ -519,7 +539,7 @@ class Audio(discord.ext.commands.Cog):
                     SearchEntry(
                         name=html.unescape(entry["snippet"]["title"]),
                         url=video_url,
-                        on_select_content=video_url,
+                        on_select_message=MessageContent(content=video_url),
                         duration=iso8601_to_unix_timestamp(
                             entry["contentDetails"]["duration"]
                         ),
@@ -553,11 +573,15 @@ class Audio(discord.ext.commands.Cog):
                 continue
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             name = f"{artist_name} - {entry["Name"]}"
+
             entries.append(
                 SearchEntry(
                     name=name,
                     url=jellyfin_client.jellyfin.download_url(entry["Id"]),
-                    on_select_content=name,
+                    on_select_message=MessageContent(
+                        content=name,
+                        artwork_url=jf_best_thumbnail_url(self.jellyfin_client, entry),
+                    ),
                     duration=entry["RunTimeTicks"] // 10_000_000,
                 )
             )
@@ -605,17 +629,43 @@ class Audio(discord.ext.commands.Cog):
                 return
             nonlocal dismissed
             dismissed = True
-            item = [
-                entry
-                for index, entry in enumerate(entries)
-                if option_label(index, entry) == select.selected_value()
-            ][0]
-            await self.__enqueue(
-                await self.__voice_client(selection_interaction), item.url
-            )
-            await interaction.edit_original_response(
-                content=f"{item.on_select_content}", view=None
-            )
+            try:
+                item = [
+                    entry
+                    for index, entry in enumerate(entries)
+                    if option_label(index, entry) == select.selected_value()
+                ][0]
+                await self.__enqueue(
+                    await self.__voice_client(selection_interaction), item.url
+                )
+                embed: discord.Embed | None = discord.utils.MISSING
+                attachments: Sequence[discord.File] = []
+                if item.on_select_message.artwork_url:
+                    async with await self.http.get(
+                        item.on_select_message.artwork_url
+                    ) as image:
+                        if image.ok:
+                            content = await image.content.read()
+                            attachments = [
+                                discord.File(
+                                    io.BytesIO(content),
+                                    filename="artwork.jpg",
+                                )
+                            ]
+                            embed = discord.Embed()
+                            embed.set_image(url="attachment://artwork.jpg")
+
+                await interaction.edit_original_response(
+                    content=item.on_select_message.content,
+                    embed=embed,
+                    attachments=attachments,
+                    view=None,
+                )
+            except discord.DiscordException as e:
+                print(f"[ ] Interaction error: {e}")
+                dismissed = False
+                await interaction.edit_original_response(view=view)
+                return
 
         select.set_callback(on_selected)
         await interaction.response.send_message(
@@ -745,17 +795,16 @@ class Audio(discord.ext.commands.Cog):
         await state.enqueue(voice_client, url)
 
 
-async def healthcheck() -> None:
+async def healthcheck(http: aiohttp.ClientSession) -> None:
     if not HEALTHCHECK_ADDRESS or len(HEALTHCHECK_ADDRESS) == 0:
         return
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.get(HEALTHCHECK_ADDRESS) as response:
-                    await response.text()
-            except aiohttp.web_exceptions.HTTPException as e:
-                print(f"[ ] health check error {e}")
-            await asyncio.sleep(60)
+    while True:
+        try:
+            async with http.get(HEALTHCHECK_ADDRESS) as response:
+                await response.text()
+        except aiohttp.web_exceptions.HTTPException as e:
+            print(f"[ ] health check error {e}")
+        await asyncio.sleep(60)
 
 
 async def main() -> None:
@@ -797,10 +846,14 @@ async def main() -> None:
             developerKey=YOUTUBE_API_KEY,
         )
 
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        async with bot:
-            await bot.add_cog(Audio(bot, executor, jellyfin_client, youtube_client))
-            await asyncio.gather(bot.start(DISCORD_BOT_TOKEN), healthcheck())
+    async with bot, aiohttp.ClientSession() as http_session:
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            await bot.add_cog(
+                Audio(bot, executor, http_session, jellyfin_client, youtube_client)
+            )
+            await asyncio.gather(
+                bot.start(DISCORD_BOT_TOKEN), healthcheck(http_session)
+            )
 
 
 if __name__ == "__main__":
