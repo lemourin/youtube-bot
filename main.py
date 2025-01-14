@@ -91,7 +91,11 @@ class PlaybackOptions:
         self.filter_graph = filter_graph
 
     def __bool__(self) -> bool:
-        return self.nightcore_factor is not None or self.bassboost_factor is not None
+        return (
+            self.nightcore_factor is not None
+            or self.bassboost_factor is not None
+            or self.filter_graph is not None
+        )
 
     def __str__(self) -> str:
         message = ""
