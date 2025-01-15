@@ -1,0 +1,6 @@
+.env
+main.sh
+cookie.txt
+venv
+**/__pycache__/
+
