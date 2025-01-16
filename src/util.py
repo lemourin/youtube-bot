@@ -1,7 +1,10 @@
+# flake8: noqa: E501
+# pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring, missing-module-docstring
+
 import re
 from jellyfin_apiclient_python import JellyfinClient
-from audio import PlaybackOptions
 import discord
+from audio import PlaybackOptions
 
 
 def trim_option_text(text: str):

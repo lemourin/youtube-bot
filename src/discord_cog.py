@@ -1,4 +1,8 @@
+# flake8: noqa: E501
+# pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring, missing-module-docstring
+
 import asyncio
+import dataclasses
 from typing import cast, Callable, Awaitable, Dict, Any, Tuple
 import io
 import sys
@@ -108,42 +112,28 @@ class GuildState:
         self._volume = value
 
 
+@dataclasses.dataclass
 class MessageContent:
-    def __init__(
-        self,
-        title: str,
-        url: str | None = None,
-        artwork_url: str | None = None,
-        color: discord.Color | None = None,
-        author_name: str | None = None,
-        author_url: str | None = None,
-    ):
-        self.title = title
-        self.url = url
-        self.artwork_url = artwork_url
-        self.color = color
-        self.author_name = author_name
-        self.author_url = author_url
+    title: str
+    url: str | None = None
+    artwork_url: str | None = None
+    color: discord.Color | None = None
+    author_name: str | None = None
+    author_url: str | None = None
 
 
+@dataclasses.dataclass
 class SearchEntry:
-    def __init__(
-        self,
-        name: str,
-        url: str,
-        on_select_message: MessageContent,
-        duration: int | None = None,
-    ) -> None:
-        self.name = name
-        self.url = url
-        self.on_select_message = on_select_message
-        self.duration = duration
+    name: str
+    url: str
+    on_select_message: MessageContent
+    duration: int | None = None
 
 
+@dataclasses.dataclass
 class JellyfinLibraryClient:
-    def __init__(self, client: JellyfinClient, library_id: str) -> None:
-        self.client = client
-        self.library_id = library_id
+    client: JellyfinClient
+    library_id: str
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -304,6 +294,9 @@ class DiscordCog(discord.ext.commands.Cog):
             if entry["kind"] == "youtube#video":
                 title = html.unescape(entry["snippet"]["title"])
                 video_url = f"https://youtube.com/watch?v={entry["id"]}"
+                author_url = (
+                    f"https://youtube.com/channel/{entry["snippet"]["channelId"]}"
+                )
                 entries.append(
                     SearchEntry(
                         name=title,
@@ -314,7 +307,7 @@ class DiscordCog(discord.ext.commands.Cog):
                             artwork_url=yt_best_thumbnail_url(entry),
                             color=discord.Color.red(),
                             author_name=entry["snippet"]["channelTitle"],
-                            author_url=f"https://youtube.com/channel/{entry["snippet"]["channelId"]}",
+                            author_url=author_url,
                         ),
                         duration=iso8601_to_unix_timestamp(
                             entry["contentDetails"]["duration"]
@@ -344,8 +337,6 @@ class DiscordCog(discord.ext.commands.Cog):
                 "Jellyfin not set up.", ephemeral=True
             )
             return
-
-        jellyfin_client = self.jellyfin_client
 
         print(f"[ ] jf {query}")
         result = await asyncio.to_thread(
@@ -483,8 +474,8 @@ class DiscordCog(discord.ext.commands.Cog):
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
                 return
+            nonlocal dismissed
             async with dismissed_lock:
-                nonlocal dismissed
                 if dismissed:
                     return
                 try:

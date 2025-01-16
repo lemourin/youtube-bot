@@ -11,8 +11,8 @@ import discord
 import discord.ext.commands
 from dotenv import load_dotenv
 import googleapiclient.discovery
-from src.discord_cog import DiscordCog, JellyfinLibraryClient
 from jellyfin_apiclient_python import JellyfinClient
+from src.discord_cog import DiscordCog, JellyfinLibraryClient
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 

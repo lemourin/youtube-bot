@@ -1,3 +1,6 @@
+# flake8: noqa: E501
+# pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring, missing-module-docstring
+
 import subprocess
 import threading
 import asyncio
