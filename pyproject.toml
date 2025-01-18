@@ -5,16 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "youtube-discord-bot"
 version = "1.0-dev"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 
 dependencies = [
-    "aiohttp==3.10.5",
-    "discord.py==2.4.0",
-    "python-dotenv==1.0.1",
-    "yt-dlp==2024.12.23",
-    "jellyfin-apiclient-python==1.10.0",
-    "validators==0.34.0",
-    "google-api-python-client==2.158.0",
+    "aiohttp",
+    "discord.py",
+    "python-dotenv",
+    "yt-dlp",
+    "jellyfin-apiclient-python",
+    "validators",
+    "google-api-python-client",
 ]
 
 [[tool.mypy.overrides]]
