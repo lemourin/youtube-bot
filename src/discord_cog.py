@@ -328,6 +328,7 @@ class DiscordCog(discord.ext.commands.Cog):
         bassboost_factor: float | None,
         filter_graph: str | None,
     ) -> None:
+        print(f"[ ] jf {query}")
         await self.__authorize_options(interaction, filter_graph)
 
         if self.jellyfin_client is None:
@@ -336,7 +337,6 @@ class DiscordCog(discord.ext.commands.Cog):
             )
             return
 
-        print(f"[ ] jf {query}")
         result = await asyncio.to_thread(
             self.jellyfin_client.client.jellyfin.search_media_items,
             media="Audio",

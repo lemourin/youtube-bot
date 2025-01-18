@@ -15,6 +15,7 @@ dependencies = [
     "jellyfin-apiclient-python",
     "validators",
     "google-api-python-client",
+    "pynacl",
 ]
 
 [tool.pylint."MESSAGES CONTROL"]

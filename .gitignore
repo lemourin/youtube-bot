@@ -1,9 +1,10 @@
 .env
 main.sh
 cookie.txt
-venv
+venv/
 **/__pycache__/
 .vscode
-dist
+dist/
 *.egg-info/
-build
+build/
+.mypy_cache/
