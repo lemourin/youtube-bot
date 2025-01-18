@@ -155,6 +155,7 @@ class LazyAudioSource(discord.AudioSource):
     def cleanup(self) -> None:
         if self.source:
             self.source.cleanup()
+            self.source = None
 
     @override
     def read(self) -> bytes:
@@ -177,6 +178,31 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             e = self.queue[1]
             await asyncio.to_thread(e.prefetch)
 
+    async def prepend(
+        self, playback_id: int, url: str, options: PlaybackOptions
+    ) -> None:
+        print(f"[ ] prepending {url} to queue")
+        e = LazyAudioSource(url, playback_id, options)
+        self.queue.insert(0, e)
+        await asyncio.to_thread(e.prefetch)
+        if len(self.queue) == 3:
+            e = self.queue[2]
+            await asyncio.to_thread(e.cleanup)
+
+    async def move(self, playback_id: int, target_position: int) -> None:
+        d = self.current_position(playback_id)
+        if d is None or d == target_position:
+            return
+
+        a = self.queue[d]
+        self.queue.pop(d)
+        self.queue.insert(target_position, a)
+        await asyncio.to_thread(a.prefetch)
+
+        if len(self.queue) > 1:
+            e = self.queue[1]
+            await asyncio.to_thread(e.prefetch)
+
     def clear(self) -> None:
         print("[ ] clearing queue")
         trash = self.queue
@@ -189,20 +215,23 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             return None
         return self.queue[0].playback_id
 
+    def current_position(self, playback_id: int) -> int | None:
+        for i, e in enumerate(self.queue):
+            if e.playback_id == playback_id:
+                return i
+        return None
+
     async def skip(self, playback_id: int | None = None) -> None:
         if not self.queue:
             return
 
-        d = -1
+        d = None
         if playback_id is None:
             d = 0
         else:
-            for index, entry in enumerate(self.queue):
-                if entry.playback_id == playback_id:
-                    d = index
-                    break
+            d = self.current_position(playback_id)
 
-        if d == -1:
+        if d is None:
             return
 
         a = self.queue[d]

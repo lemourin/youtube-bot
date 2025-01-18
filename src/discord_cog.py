@@ -68,45 +68,89 @@ class GuildState:
         options: PlaybackOptions,
     ) -> None:
         async with self._queue_lock:
-            await self._queue.add(playback_id, url, options)
-            if self._is_playing:
-                return
-            print("[ ] voice client not playing, starting")
-            self._is_playing = True
-            self._source = await asyncio.to_thread(
-                lambda: YTDLSource(
-                    self._queue,
-                    self._volume,
-                    self._executor,
-                )
+            await self._enqueue(voice_client, playback_id, url, options)
+
+    async def _enqueue(
+        self,
+        voice_client: discord.VoiceClient,
+        playback_id: int,
+        url: str,
+        options: PlaybackOptions,
+    ) -> None:
+        await self._queue.add(playback_id, url, options)
+        await self._start(voice_client)
+
+    async def _start(self, voice_client: discord.VoiceClient) -> None:
+        if self._is_playing:
+            return
+
+        print("[ ] voice client not playing, starting")
+        self._is_playing = True
+        self._source = await asyncio.to_thread(
+            lambda: YTDLSource(
+                self._queue,
+                self._volume,
+                self._executor,
             )
+        )
 
-            def finalizer(self, err):
-                if err:
-                    print(f"[!] player error: {err}")
-                else:
-                    print("[ ] finished playing")
-                    self._is_playing = False
+        def finalizer(self, err):
+            if err:
+                print(f"[!] player error: {err}")
+            else:
+                print("[ ] finished playing")
+                self._is_playing = False
 
-            voice_client.play(
-                self._source,
-                signal_type="music",
-                bitrate=AUDIO_BITRATE,
-                fec=False,
-                # fec=True,
-                # expected_packet_loss=0.05,
-                after=lambda err: finalizer(self, err),
-            )
-
-            print("[ ] play started")
+        voice_client.play(
+            self._source,
+            signal_type="music",
+            bitrate=AUDIO_BITRATE,
+            fec=False,
+            # fec=True,
+            # expected_packet_loss=0.05,
+            after=lambda err: finalizer(self, err),
+        )
+        print("[ ] play started")
 
     async def skip(self, playback_id: int | None = None) -> None:
         async with self._queue_lock:
-            if self._source is not None and (
-                playback_id is None or self._queue.current_playback_id() == playback_id
-            ):
-                self._source.buffered_audio.drain()
-            await self._queue.skip(playback_id)
+            await self._skip(playback_id)
+
+    async def is_skippable(self, playback_id: int) -> bool:
+        async with self._queue_lock:
+            return self._queue.current_position(playback_id) is not None
+
+    async def _skip(self, playback_id: int | None = None) -> None:
+        if self._source is not None and (
+            playback_id is None or self._queue.current_playback_id() == playback_id
+        ):
+            self._source.buffered_audio.drain()
+        await self._queue.skip(playback_id)
+
+    async def _move_track(self, playback_id: int, target_position: int) -> None:
+        if target_position == 0 and playback_id != self._queue.current_playback_id():
+            await self._skip()
+        await self._queue.move(playback_id, target_position)
+
+    async def play_now(
+        self,
+        voice_client: discord.VoiceClient,
+        playback_id: int,
+        url: str,
+        options: PlaybackOptions,
+    ) -> None:
+        async with self._queue_lock:
+            if self._queue.current_position(playback_id) is not None:
+                await self._move_track(playback_id, target_position=0)
+                await self._start(voice_client)
+            else:
+                await self._skip()
+                await self._queue.prepend(playback_id, url, options)
+                await self._start(voice_client)
+
+    async def current_playback_id(self) -> int | None:
+        async with self._queue_lock:
+            return self._queue.current_playback_id()
 
     def is_playing(self) -> bool:
         return self._is_playing
@@ -277,7 +321,7 @@ class DiscordCog(discord.ext.commands.Cog):
             )
             await interaction.response.send_message(
                 content=f"{query}{f"\n{options}" if options else ""}",
-                view=self.__playback_control_view(playback_id),
+                view=self.__playback_control_view(playback_id, query, options),
             )
             return
 
@@ -428,11 +472,33 @@ class DiscordCog(discord.ext.commands.Cog):
                 filename="artwork.jpg",
             )
 
-    def __playback_control_view(self, playback_id: int) -> discord.ui.View:
+    def __playback_control_view(
+        self, playback_id: int, url: str, playback_options: PlaybackOptions
+    ) -> discord.ui.View:
         async def on_skip(interaction: discord.Interaction):
             assert interaction.guild
-            await self.state[interaction.guild.id].skip(playback_id)
-            await interaction.response.edit_message(view=None)
+            state = self.state[interaction.guild.id]
+            if not await state.is_skippable(playback_id):
+                return await interaction.response.send_message(
+                    "Track not enqueued.", ephemeral=True, delete_after=5
+                )
+            await state.skip(playback_id)
+            await interaction.response.defer()
+
+        async def on_play_now(interaction: discord.Interaction):
+            assert interaction.guild
+            state = self.state[interaction.guild.id]
+            if await state.current_playback_id() == playback_id:
+                return await interaction.response.send_message(
+                    "Already playing.", ephemeral=True, delete_after=5
+                )
+            await state.play_now(
+                await self.__voice_client(interaction),
+                playback_id,
+                url,
+                playback_options,
+            )
+            await interaction.response.defer()
 
         view = discord.ui.View()
         skip_button = ButtonView(
@@ -441,6 +507,12 @@ class DiscordCog(discord.ext.commands.Cog):
             callback=on_skip,
         )
         view.add_item(skip_button)
+        play_now_button = ButtonView(
+            style=discord.ButtonStyle.blurple,
+            label="Play Now",
+            callback=on_play_now,
+        )
+        view.add_item(play_now_button)
         return view
 
     async def __search_result_select(
@@ -468,7 +540,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     content=None,
                     embed=embed,
                     attachments=[attachment],
-                    view=self.__playback_control_view(playback_id),
+                    view=self.__playback_control_view(playback_id, item.url, options),
                 )
             else:
                 message = ""
