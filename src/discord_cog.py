@@ -9,7 +9,7 @@ import aiohttp
 import discord
 import discord.ext.commands
 import validators
-from jellyfin_apiclient_python import JellyfinClient
+from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions
 from src.util import (
     iso8601_to_unix_timestamp,

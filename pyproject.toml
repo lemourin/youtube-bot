@@ -17,13 +17,6 @@ dependencies = [
     "google-api-python-client",
 ]
 
-[[tool.mypy.overrides]]
-module = [
-    "jellyfin_apiclient_python.*",
-    "googleapiclient.*",
-]
-follow_untyped_imports = true
-
 [tool.pylint."MESSAGES CONTROL"]
 disable = [
     "locally-disabled",

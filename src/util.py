@@ -1,5 +1,5 @@
 import re
-from jellyfin_apiclient_python import JellyfinClient
+from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 import discord
 from src.audio import PlaybackOptions
 
