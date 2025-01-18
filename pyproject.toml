@@ -23,3 +23,11 @@ module = [
     "googleapiclient.*",
 ]
 follow_untyped_imports = true
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+    "locally-disabled",
+    "missing-class-docstring",
+    "missing-module-docstring",
+    "missing-function-docstring",
+]

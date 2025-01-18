@@ -1,6 +1,3 @@
-# flake8: noqa: E501
-# pylint: disable=locally-disabled, missing-class-docstring, missing-module-docstring, missing-function-docstring, missing-module-docstring
-
 import subprocess
 import threading
 import asyncio
@@ -113,23 +110,26 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
         )
 
     def __probe(self, url: str) -> dict:
-        with YTDLBuffer.create_process(url) as input_process, subprocess.Popen(
-            executable="ffprobe",
-            args=[
-                "-i",
-                "-",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-            ],
-            stdin=input_process.stdout,
-            stdout=asyncio.subprocess.PIPE,
-        ) as process:
+        with (
+            YTDLBuffer.create_process(url) as input_process,
+            subprocess.Popen(
+                executable="ffprobe",
+                args=[
+                    "-i",
+                    "-",
+                    "-v",
+                    "quiet",
+                    "-print_format",
+                    "json",
+                    "-show_streams",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                ],
+                stdin=input_process.stdout,
+                stdout=asyncio.subprocess.PIPE,
+            ) as process,
+        ):
             assert process.stdout
             return json.loads(process.stdout.read())
 
