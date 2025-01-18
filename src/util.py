@@ -4,7 +4,7 @@
 import re
 from jellyfin_apiclient_python import JellyfinClient
 import discord
-from audio import PlaybackOptions
+from src.audio import PlaybackOptions
 
 
 def trim_option_text(text: str):

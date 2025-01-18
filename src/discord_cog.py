@@ -3,7 +3,7 @@
 
 import asyncio
 import dataclasses
-from typing import cast, Callable, Awaitable, Dict, Any, Tuple
+from typing import cast, override, Callable, Awaitable, Dict, Any, Tuple
 import io
 import sys
 from concurrent.futures import Executor
@@ -13,8 +13,8 @@ import discord
 import discord.ext.commands
 import validators
 from jellyfin_apiclient_python import JellyfinClient
-from audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions
-from util import (
+from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions
+from src.util import (
     iso8601_to_unix_timestamp,
     jf_best_thumbnail_url,
     trim_option_text,
@@ -38,6 +38,7 @@ class SelectTrack(discord.ui.Select):
     def set_callback(self, callback: Callable[[discord.Interaction], Awaitable[None]]):
         self._callback = callback
 
+    @override
     async def callback(self, interaction: discord.Interaction) -> None:
         assert self._callback
         return await self._callback(interaction)

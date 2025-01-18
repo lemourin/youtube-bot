@@ -4,7 +4,7 @@
 import subprocess
 import threading
 import asyncio
-from typing import cast
+from typing import cast, override
 import io
 from concurrent.futures import Executor
 import json
@@ -15,6 +15,7 @@ class YTDLBuffer(io.BufferedIOBase):
     def __init__(self, url: str) -> None:
         self.proc = YTDLBuffer.create_process(url)
 
+    @override
     def read(self, n: int | None = None) -> bytes:
         # print("[ ] YTDLBuffer read")
         assert self.proc.stdout is not None
@@ -132,6 +133,7 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
             assert process.stdout
             return json.loads(process.stdout.read())
 
+    @override
     def cleanup(self) -> None:
         print("[ ] YTDLStreamAudio cleanup")
         self.buffer.cleanup()
@@ -148,10 +150,12 @@ class LazyAudioSource(discord.AudioSource):
         if self.source is None:
             self.source = YTDLStreamAudio(self.url, self.options)
 
+    @override
     def cleanup(self) -> None:
         if self.source:
             self.source.cleanup()
 
+    @override
     def read(self) -> bytes:
         self.prefetch()
         assert self.source
@@ -190,6 +194,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             await asyncio.to_thread(e.prefetch)
         a.cleanup()
 
+    @override
     def read(self) -> bytes:
         # print("[ ] YTDLQueuedStreamAudio read")
         trash = None
@@ -210,9 +215,11 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             trash.cleanup()
         return c
 
+    @override
     def is_opus(self) -> bool:
         return False
 
+    @override
     def cleanup(self) -> None:
         print("[ ] YTDLQueuedStreamAudio cleanup")
         trash = self.queue
@@ -241,6 +248,7 @@ class BufferedAudioSource(discord.AudioSource):
             self.chunks.clear()
             self.cv.notify()
 
+    @override
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
         self.chunk_sem.acquire()
@@ -255,6 +263,7 @@ class BufferedAudioSource(discord.AudioSource):
                 self.cv.notify()
             return c
 
+    @override
     def cleanup(self) -> None:
         print("[ ] BufferedAudioSource cleanup")
         if not self.future:
