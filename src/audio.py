@@ -141,8 +141,9 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
 
 
 class LazyAudioSource(discord.AudioSource):
-    def __init__(self, url: str, options: PlaybackOptions) -> None:
+    def __init__(self, url: str, playback_id: int, options: PlaybackOptions) -> None:
         self.url = url
+        self.playback_id = playback_id
         self.source: discord.AudioSource | None = None
         self.options = options
 
@@ -169,9 +170,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
-    async def add(self, url: str, options: PlaybackOptions) -> None:
+    async def add(self, playback_id: int, url: str, options: PlaybackOptions) -> None:
         print(f"[ ] adding {url} to queue")
-        self.queue.append(LazyAudioSource(url, options))
+        self.queue.append(LazyAudioSource(url, playback_id, options))
         if len(self.queue) == 2:
             e = self.queue[1]
             await asyncio.to_thread(e.prefetch)
@@ -183,16 +184,34 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         for a in trash:
             a.cleanup()
 
-    async def skip(self) -> None:
+    def current_playback_id(self) -> int | None:
+        if not self.queue:
+            return None
+        return self.queue[0].playback_id
+
+    async def skip(self, playback_id: int | None = None) -> None:
         if not self.queue:
             return
-        a = self.queue[0]
-        self.queue = self.queue[1:]
+
+        d = -1
+        if playback_id is None:
+            d = 0
+        else:
+            for index, entry in enumerate(self.queue):
+                if entry.playback_id == playback_id:
+                    d = index
+                    break
+
+        if d == -1:
+            return
+
+        a = self.queue[d]
+        self.queue.pop(d)
+        await asyncio.to_thread(a.cleanup)
 
         if len(self.queue) > 1:
             e = self.queue[1]
             await asyncio.to_thread(e.prefetch)
-        a.cleanup()
 
     @override
     def read(self) -> bytes:

@@ -24,20 +24,30 @@ from src.util import (
 AUDIO_BITRATE = 320
 
 
-class SelectTrack(discord.ui.Select):
-    def __init__(self) -> None:
-        super().__init__()
-        self._callback: Callable[[discord.Interaction], Awaitable[None]] | None = None
+class SelectView(discord.ui.Select):
+    def __init__(
+        self, callback: Callable[[discord.Interaction], Awaitable[None]], **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self._callback = callback
 
     def selected_value(self) -> str:
         return self.values[0]
 
-    def set_callback(self, callback: Callable[[discord.Interaction], Awaitable[None]]):
+    @override
+    async def callback(self, interaction: discord.Interaction) -> None:
+        return await self._callback(interaction)
+
+
+class ButtonView(discord.ui.Button):
+    def __init__(
+        self, callback: Callable[[discord.Interaction], Awaitable[None]], **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
         self._callback = callback
 
     @override
     async def callback(self, interaction: discord.Interaction) -> None:
-        assert self._callback
         return await self._callback(interaction)
 
 
@@ -53,11 +63,12 @@ class GuildState:
     async def enqueue(
         self,
         voice_client: discord.VoiceClient,
+        playback_id: int,
         url: str,
         options: PlaybackOptions,
     ) -> None:
         async with self._queue_lock:
-            await self._queue.add(url, options)
+            await self._queue.add(playback_id, url, options)
             if self._is_playing:
                 return
             print("[ ] voice client not playing, starting")
@@ -89,12 +100,13 @@ class GuildState:
 
             print("[ ] play started")
 
-    async def skip(self) -> None:
+    async def skip(self, playback_id: int | None = None) -> None:
         async with self._queue_lock:
-            if self._source is not None and self._source.buffered_audio:
+            if self._source is not None and (
+                playback_id is None or self._queue.current_playback_id() == playback_id
+            ):
                 self._source.buffered_audio.drain()
-            if self._queue:
-                await self._queue.skip()
+            await self._queue.skip(playback_id)
 
     def is_playing(self) -> bool:
         return self._is_playing
@@ -151,6 +163,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
+        self.next_playback_id = 0
 
         @bot.event
         async def on_ready() -> None:
@@ -254,13 +267,17 @@ class DiscordCog(discord.ext.commands.Cog):
             filter_graph=filter_graph,
         )
         if validators.url(query):
+            playback_id = self.next_playback_id
+            self.next_playback_id += 1
             await self.__enqueue(
                 await self.__voice_client(interaction),
+                playback_id,
                 query,
                 options=options,
             )
             await interaction.response.send_message(
-                content=f"{query}{f"\n{options}" if options else ""}"
+                content=f"{query}{f"\n{options}" if options else ""}",
+                view=self.__playback_control_view(playback_id),
             )
             return
 
@@ -411,6 +428,21 @@ class DiscordCog(discord.ext.commands.Cog):
                 filename="artwork.jpg",
             )
 
+    def __playback_control_view(self, playback_id: int) -> discord.ui.View:
+        async def on_skip(interaction: discord.Interaction):
+            assert interaction.guild
+            await self.state[interaction.guild.id].skip(playback_id)
+            await interaction.response.edit_message(view=None)
+
+        view = discord.ui.View()
+        skip_button = ButtonView(
+            style=discord.ButtonStyle.red,
+            label="Skip",
+            callback=on_skip,
+        )
+        view.add_item(skip_button)
+        return view
+
     async def __search_result_select(
         self,
         interaction: discord.Interaction,
@@ -426,7 +458,61 @@ class DiscordCog(discord.ext.commands.Cog):
         def option_label(index: int, entry: SearchEntry) -> str:
             return f"{index + 1}. {entry.name}"
 
-        select = SelectTrack()
+        dismissed_lock = asyncio.Lock()
+        dismissed = False
+
+        async def edit_original_response(item: SearchEntry, playback_id: int) -> None:
+            if item.on_select_message.artwork_url:
+                embed, attachment = await self.__create_embed(item, options)
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=embed,
+                    attachments=[attachment],
+                    view=self.__playback_control_view(playback_id),
+                )
+            else:
+                message = ""
+                if item.on_select_message.author_name:
+                    message += f"{item.on_select_message.author_name} - "
+                message += item.on_select_message.title
+                if options:
+                    message += f"\n{options}"
+                await interaction.edit_original_response(content=message, view=None)
+
+        async def on_selected(selection_interaction: discord.Interaction) -> None:
+            if interaction.user.id != selection_interaction.user.id:
+                return await selection_interaction.response.send_message(
+                    "Fuck off.", ephemeral=True, delete_after=5
+                )
+            nonlocal dismissed
+            async with dismissed_lock:
+                if dismissed:
+                    return
+                try:
+                    item = [
+                        entry
+                        for index, entry in enumerate(entries)
+                        if trim_option_text(option_label(index, entry))
+                        == select.selected_value()
+                    ][0]
+
+                    playback_id = self.next_playback_id
+                    self.next_playback_id += 1
+
+                    await self.__enqueue(
+                        await self.__voice_client(selection_interaction),
+                        playback_id,
+                        item.url,
+                        options=options,
+                    )
+                    await edit_original_response(item, playback_id)
+                    dismissed = True
+                except discord.DiscordException as e:
+                    print(f"[ ] Interaction error: {e}")
+                    await interaction.edit_original_response(view=view)
+            await selection_interaction.response.defer()
+
+        select = SelectView(callback=on_selected)
         message = ""
         for index, entry in enumerate(entries):
             print(f"[ ] search result: {option_label(index, entry)}")
@@ -445,56 +531,6 @@ class DiscordCog(discord.ext.commands.Cog):
         view = discord.ui.View()
         view.add_item(select)
 
-        dismissed_lock = asyncio.Lock()
-        dismissed = False
-
-        async def edit_original_response(item: SearchEntry) -> None:
-            if item.on_select_message.artwork_url:
-                embed, attachment = await self.__create_embed(item, options)
-                await interaction.edit_original_response(
-                    content=None,
-                    embed=embed,
-                    attachments=[attachment],
-                    view=None,
-                )
-            else:
-                message = ""
-                if item.on_select_message.author_name:
-                    message += f"{item.on_select_message.author_name} - "
-                message += item.on_select_message.title
-                if options:
-                    message += f"\n{options}"
-                await interaction.edit_original_response(content=message, view=None)
-
-        async def on_selected(selection_interaction: discord.Interaction) -> None:
-            if interaction.user.id != selection_interaction.user.id:
-                await selection_interaction.response.send_message(
-                    "Fuck off.", ephemeral=True, delete_after=5
-                )
-                return
-            nonlocal dismissed
-            async with dismissed_lock:
-                if dismissed:
-                    return
-                try:
-                    item = [
-                        entry
-                        for index, entry in enumerate(entries)
-                        if trim_option_text(option_label(index, entry))
-                        == select.selected_value()
-                    ][0]
-                    await self.__enqueue(
-                        await self.__voice_client(selection_interaction),
-                        item.url,
-                        options=options,
-                    )
-                    await edit_original_response(item)
-                    dismissed = True
-                except discord.DiscordException as e:
-                    print(f"[ ] Interaction error: {e}")
-                    await interaction.edit_original_response(view=view)
-
-        select.set_callback(on_selected)
         await interaction.response.send_message(
             f"```{message}```",
             view=view,
@@ -622,8 +658,9 @@ class DiscordCog(discord.ext.commands.Cog):
     async def __enqueue(
         self,
         voice_client: discord.VoiceClient,
+        playback_id: int,
         url: str,
         options: PlaybackOptions,
     ) -> None:
         state = self.__guild_state(voice_client.guild.id)
-        await state.enqueue(voice_client, url, options)
+        await state.enqueue(voice_client, playback_id, url, options)
