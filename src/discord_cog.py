@@ -1,23 +1,23 @@
 import asyncio
-import dataclasses
 from typing import cast, override, Callable, Awaitable, Dict, Any, Tuple
 import io
 import sys
 from concurrent.futures import Executor
-import html
 import aiohttp
 import discord
 import discord.ext.commands
 import validators
-from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions, AudioTrack
 from src.util import (
-    iso8601_to_unix_timestamp,
+    yt_video_data_from_url,
+    yt_item_to_search_item,
     jf_best_thumbnail_url,
     trim_option_text,
-    yt_best_thumbnail_url,
     add_to_embed,
     duration_to_str,
+    JellyfinLibraryClient,
+    SearchEntry,
+    MessageContent,
 )
 
 
@@ -173,30 +173,6 @@ class GuildState:
             return [e.track for e in self._queue.queue]
 
 
-@dataclasses.dataclass
-class MessageContent:
-    title: str
-    url: str | None = None
-    artwork_url: str | None = None
-    color: discord.Color | None = None
-    author_name: str | None = None
-    author_url: str | None = None
-
-
-@dataclasses.dataclass
-class SearchEntry:
-    name: str
-    url: str
-    on_select_message: MessageContent
-    duration: int | None = None
-
-
-@dataclasses.dataclass
-class JellyfinLibraryClient:
-    client: JellyfinClient
-    library_id: str
-
-
 class DiscordCog(discord.ext.commands.Cog):
     def __init__(
         self,
@@ -301,6 +277,53 @@ class DiscordCog(discord.ext.commands.Cog):
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
 
+    async def __url(
+        self, interaction: discord.Interaction, url: str, options: PlaybackOptions
+    ) -> None:
+        playback_id = self.next_playback_id
+        self.next_playback_id += 1
+        track = AudioTrack(
+            url=url,
+            title=url,
+            playback_id=playback_id,
+            playback_options=options,
+        )
+        await self.__enqueue(await self.__voice_client(interaction), track)
+        await interaction.response.defer()
+
+        try:
+            details = await asyncio.to_thread(yt_video_data_from_url, url)
+            if details is not None and all(
+                x in details
+                for x in [
+                    "title",
+                    "thumbnail",
+                ]
+            ):
+                embed, attachments = await self.__create_embed(
+                    MessageContent(
+                        title=details["title"],
+                        artwork_url=details["thumbnail"],
+                        author_name=details.get("uploader"),
+                        author_url=details.get("uploader_url"),
+                        color=discord.Color.red(),
+                        url=details.get("original_url"),
+                    ),
+                    options,
+                )
+                return await interaction.followup.send(
+                    embed=embed,
+                    files=attachments,
+                    view=self.__playback_control_view(interaction, track),
+                )
+        except discord.DiscordException as e:
+            print(f"[ ] interaction error {e}")
+
+        await interaction.followup.send(
+            content=f"{url}{f"\n{options}" if options else ""}",
+            view=self.__playback_control_view(interaction, track),
+        )
+
     @discord.app_commands.describe(
         query="Either a url or a search query.",
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
@@ -329,20 +352,7 @@ class DiscordCog(discord.ext.commands.Cog):
             stop_timestamp=stop_timestamp,
         )
         if validators.url(query):
-            playback_id = self.next_playback_id
-            self.next_playback_id += 1
-            track = AudioTrack(
-                url=query,
-                title=query,
-                playback_id=playback_id,
-                playback_options=options,
-            )
-            await self.__enqueue(await self.__voice_client(interaction), track)
-            await interaction.response.send_message(
-                content=f"{query}{f"\n{options}" if options else ""}",
-                view=self.__playback_control_view(interaction, track),
-            )
-            return
+            return await self.__url(interaction, url=query, options=options)
 
         if not self.youtube_client:
             await interaction.response.send_message(
@@ -370,28 +380,7 @@ class DiscordCog(discord.ext.commands.Cog):
             if len(entries) >= 10:
                 break
             if entry["kind"] == "youtube#video":
-                title = html.unescape(entry["snippet"]["title"])
-                video_url = f"https://youtube.com/watch?v={entry["id"]}"
-                author_url = (
-                    f"https://youtube.com/channel/{entry["snippet"]["channelId"]}"
-                )
-                entries.append(
-                    SearchEntry(
-                        name=title,
-                        url=video_url,
-                        on_select_message=MessageContent(
-                            title=title,
-                            url=video_url,
-                            artwork_url=yt_best_thumbnail_url(entry),
-                            color=discord.Color.red(),
-                            author_name=entry["snippet"]["channelTitle"],
-                            author_url=author_url,
-                        ),
-                        duration=iso8601_to_unix_timestamp(
-                            entry["contentDetails"]["duration"]
-                        ),
-                    )
-                )
+                entries.append(yt_item_to_search_item(entry))
         await self.__search_result_select(interaction, entries, options)
 
     @discord.app_commands.describe(
@@ -476,20 +465,24 @@ class DiscordCog(discord.ext.commands.Cog):
             )
 
     def __create_embed_ui(
-        self, item: SearchEntry, options: PlaybackOptions, image: io.BytesIO | None
+        self,
+        message_content: MessageContent,
+        options: PlaybackOptions,
+        image: io.BytesIO | str | None,
     ) -> Tuple[discord.Embed, list[discord.File]]:
         embed = discord.Embed(
-            title=item.on_select_message.title,
-            url=item.on_select_message.url,
-            color=item.on_select_message.color,
+            title=message_content.title,
+            url=message_content.url,
+            color=message_content.color,
         )
-        embed.set_author(
-            name=item.on_select_message.author_name,
-            url=item.on_select_message.author_url,
-        )
+        if message_content.author_name is not None:
+            embed.set_author(
+                name=message_content.author_name,
+                url=message_content.author_url,
+            )
         add_to_embed(embed, options)
         files: list[discord.File] = []
-        if image:
+        if isinstance(image, io.BytesIO):
             embed.set_image(url="attachment://artwork.jpg")
             files = [
                 discord.File(
@@ -497,20 +490,26 @@ class DiscordCog(discord.ext.commands.Cog):
                     filename="artwork.jpg",
                 )
             ]
+        elif isinstance(image, str):
+            embed.set_image(url=image)
         return embed, files
 
     async def __create_embed(
-        self, item: SearchEntry, options: PlaybackOptions
+        self, message_content: MessageContent, options: PlaybackOptions
     ) -> Tuple[discord.Embed, list[discord.File]]:
         image: io.BytesIO | None = None
-        if item.on_select_message.artwork_url:
-            async with await self.http.get(
-                item.on_select_message.artwork_url
-            ) as response:
+        if (
+            message_content.artwork_url
+            and self.jellyfin_client
+            and message_content.artwork_url.startswith(self.jellyfin_client.address)
+        ):
+            async with await self.http.get(message_content.artwork_url) as response:
                 if response.ok:
                     image = io.BytesIO(await response.content.read())
-                    return self.__create_embed_ui(item, options, image)
-        return self.__create_embed_ui(item, options, image=None)
+                    return self.__create_embed_ui(message_content, options, image)
+        return self.__create_embed_ui(
+            message_content, options, image=message_content.artwork_url
+        )
 
     def __playback_control_view(
         self,
@@ -616,7 +615,9 @@ class DiscordCog(discord.ext.commands.Cog):
                     await self.__enqueue(
                         await self.__voice_client(selection_interaction), track
                     )
-                    embed, attachments = await self.__create_embed(item, options)
+                    embed, attachments = await self.__create_embed(
+                        item.on_select_message, options
+                    )
                     await interaction.edit_original_response(
                         content=None,
                         embed=embed,

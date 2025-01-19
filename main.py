@@ -70,7 +70,9 @@ async def main() -> None:
             },
             discover=False,
         )
-        jellyfin_client = JellyfinLibraryClient(client, JELLYFIN_LIBRARY_ID)
+        jellyfin_client = JellyfinLibraryClient(
+            client, JELLYFIN_LIBRARY_ID, JELLYFIN_ADDRESS
+        )
 
     youtube_client = None
     if YOUTUBE_API_KEY:

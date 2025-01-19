@@ -1,7 +1,37 @@
 import re
+import subprocess
+import asyncio
+import json
+import html
+import dataclasses
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 import discord
 from src.audio import PlaybackOptions
+
+
+@dataclasses.dataclass
+class MessageContent:
+    title: str
+    url: str | None = None
+    artwork_url: str | None = None
+    color: discord.Color | None = None
+    author_name: str | None = None
+    author_url: str | None = None
+
+
+@dataclasses.dataclass
+class SearchEntry:
+    name: str
+    url: str
+    on_select_message: MessageContent
+    duration: int | None = None
+
+
+@dataclasses.dataclass
+class JellyfinLibraryClient:
+    client: JellyfinClient
+    library_id: str
+    address: str
 
 
 def trim_option_text(text: str):
@@ -76,3 +106,35 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
         embed.add_field(name="start_timestamp", value=options.start_timestamp)
     if options.stop_timestamp:
         embed.add_field(name="stop_timestamp", value=options.stop_timestamp)
+
+
+def yt_video_data_from_url(url: str) -> dict | None:
+    with subprocess.Popen(
+        executable="yt-dlp",
+        args=["-x", "--cookies", "cookie.txt", "-J", url],
+        stdout=asyncio.subprocess.PIPE,
+    ) as process:
+        assert process.stdout
+        data = process.stdout.read()
+        if process.wait() != 0:
+            return None
+        return json.loads(data)
+
+
+def yt_item_to_search_item(entry: dict) -> SearchEntry:
+    title = html.unescape(entry["snippet"]["title"])
+    video_url = f"https://youtube.com/watch?v={entry["id"]}"
+    author_url = f"https://youtube.com/channel/{entry["snippet"]["channelId"]}"
+    return SearchEntry(
+        name=title,
+        url=video_url,
+        on_select_message=MessageContent(
+            title=title,
+            url=video_url,
+            artwork_url=yt_best_thumbnail_url(entry),
+            color=discord.Color.red(),
+            author_name=entry["snippet"]["channelTitle"],
+            author_url=author_url,
+        ),
+        duration=iso8601_to_unix_timestamp(entry["contentDetails"]["duration"]),
+    )
