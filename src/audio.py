@@ -1,6 +1,7 @@
 import subprocess
 import threading
 import asyncio
+import dataclasses
 from typing import cast, override
 import io
 from concurrent.futures import Executor
@@ -79,6 +80,14 @@ class PlaybackOptions:
         return message
 
 
+@dataclasses.dataclass
+class AudioTrack:
+    url: str
+    title: str
+    playback_id: int
+    playback_options: PlaybackOptions
+
+
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
     def __init__(self, url: str, options: PlaybackOptions) -> None:
         self.buffer = YTDLBuffer(url)
@@ -141,15 +150,13 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
 
 
 class LazyAudioSource(discord.AudioSource):
-    def __init__(self, url: str, playback_id: int, options: PlaybackOptions) -> None:
-        self.url = url
-        self.playback_id = playback_id
+    def __init__(self, track: AudioTrack) -> None:
+        self.track = track
         self.source: discord.AudioSource | None = None
-        self.options = options
 
     def prefetch(self) -> None:
         if self.source is None:
-            self.source = YTDLStreamAudio(self.url, self.options)
+            self.source = YTDLStreamAudio(self.track.url, self.track.playback_options)
 
     @override
     def cleanup(self) -> None:
@@ -171,18 +178,16 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
-    async def add(self, playback_id: int, url: str, options: PlaybackOptions) -> None:
-        print(f"[ ] adding {url} to queue")
-        self.queue.append(LazyAudioSource(url, playback_id, options))
+    async def add(self, track: AudioTrack) -> None:
+        print(f"[ ] adding {track.url} to queue")
+        self.queue.append(LazyAudioSource(track))
         if len(self.queue) == 2:
             e = self.queue[1]
             await asyncio.to_thread(e.prefetch)
 
-    async def prepend(
-        self, playback_id: int, url: str, options: PlaybackOptions
-    ) -> None:
-        print(f"[ ] prepending {url} to queue")
-        e = LazyAudioSource(url, playback_id, options)
+    async def prepend(self, track: AudioTrack) -> None:
+        print(f"[ ] prepending {track.url} to queue")
+        e = LazyAudioSource(track)
         self.queue.insert(0, e)
         await asyncio.to_thread(e.prefetch)
         if len(self.queue) == 3:
@@ -213,11 +218,11 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
     def current_playback_id(self) -> int | None:
         if not self.queue:
             return None
-        return self.queue[0].playback_id
+        return self.queue[0].track.playback_id
 
     def current_position(self, playback_id: int) -> int | None:
         for i, e in enumerate(self.queue):
-            if e.playback_id == playback_id:
+            if e.track.playback_id == playback_id:
                 return i
         return None
 

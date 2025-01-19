@@ -10,7 +10,7 @@ import discord
 import discord.ext.commands
 import validators
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
-from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions
+from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions, AudioTrack
 from src.util import (
     iso8601_to_unix_timestamp,
     jf_best_thumbnail_url,
@@ -72,21 +72,17 @@ class GuildState:
     async def enqueue(
         self,
         voice_client: discord.VoiceClient,
-        playback_id: int,
-        url: str,
-        options: PlaybackOptions,
+        track: AudioTrack,
     ) -> None:
         async with self._queue_lock:
-            await self._enqueue(voice_client, playback_id, url, options)
+            await self._enqueue(voice_client, track)
 
     async def _enqueue(
         self,
         voice_client: discord.VoiceClient,
-        playback_id: int,
-        url: str,
-        options: PlaybackOptions,
+        track: AudioTrack,
     ) -> None:
-        await self._queue.add(playback_id, url, options)
+        await self._queue.add(track)
         await self._start(voice_client)
 
     async def _start(self, voice_client: discord.VoiceClient) -> None:
@@ -144,17 +140,15 @@ class GuildState:
     async def play_now(
         self,
         voice_client: discord.VoiceClient,
-        playback_id: int,
-        url: str,
-        options: PlaybackOptions,
+        track: AudioTrack,
     ) -> None:
         async with self._queue_lock:
-            if self._queue.current_position(playback_id) is not None:
-                await self._move_track(playback_id, target_position=0)
+            if self._queue.current_position(track.playback_id) is not None:
+                await self._move_track(track.playback_id, target_position=0)
                 await self._start(voice_client)
             else:
                 await self._skip()
-                await self._queue.prepend(playback_id, url, options)
+                await self._queue.prepend(track)
                 await self._start(voice_client)
 
     async def current_playback_id(self) -> int | None:
@@ -173,6 +167,10 @@ class GuildState:
 
     def set_volume(self, value: float) -> None:
         self._volume = value
+
+    async def enqueued_tracks(self) -> list[AudioTrack]:
+        async with self._queue_lock:
+            return [e.track for e in self._queue.queue]
 
 
 @dataclasses.dataclass
@@ -295,6 +293,11 @@ class DiscordCog(discord.ext.commands.Cog):
                 description="Ping.",
                 callback=self.ping,
             ),
+            discord.app_commands.Command(
+                name="queue",
+                description="Show enqueued tracks.",
+                callback=self.queue,
+            ),
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
 
@@ -322,17 +325,16 @@ class DiscordCog(discord.ext.commands.Cog):
         if validators.url(query):
             playback_id = self.next_playback_id
             self.next_playback_id += 1
-            await self.__enqueue(
-                await self.__voice_client(interaction),
-                playback_id,
-                query,
-                options=options,
+            track = AudioTrack(
+                url=query,
+                title=query,
+                playback_id=playback_id,
+                playback_options=options,
             )
+            await self.__enqueue(await self.__voice_client(interaction), track)
             await interaction.response.send_message(
                 content=f"{query}{f"\n{options}" if options else ""}",
-                view=self.__playback_control_view(
-                    playback_id, query, options, interaction
-                ),
+                view=self.__playback_control_view(interaction, track),
             )
             return
 
@@ -485,34 +487,27 @@ class DiscordCog(discord.ext.commands.Cog):
 
     def __playback_control_view(
         self,
-        playback_id: int,
-        url: str,
-        playback_options: PlaybackOptions,
         interaction: discord.Interaction,
+        track: AudioTrack,
     ) -> discord.ui.View:
         async def on_skip(interaction: discord.Interaction):
             assert interaction.guild
             state = self.state[interaction.guild.id]
-            if not await state.is_skippable(playback_id):
+            if not await state.is_skippable(track.playback_id):
                 return await interaction.response.send_message(
                     "Track not enqueued.", ephemeral=True, delete_after=5
                 )
-            await state.skip(playback_id)
+            await state.skip(track.playback_id)
             await interaction.response.defer()
 
         async def on_play_now(interaction: discord.Interaction):
             assert interaction.guild
             state = self.state[interaction.guild.id]
-            if await state.current_playback_id() == playback_id:
+            if await state.current_playback_id() == track.playback_id:
                 return await interaction.response.send_message(
                     "Already playing.", ephemeral=True, delete_after=5
                 )
-            await state.play_now(
-                await self.__voice_client(interaction),
-                playback_id,
-                url,
-                playback_options,
-            )
+            await state.play_now(await self.__voice_client(interaction), track)
             await interaction.response.defer()
 
         async def on_timeout():
@@ -550,16 +545,14 @@ class DiscordCog(discord.ext.commands.Cog):
         def option_label(index: int, entry: SearchEntry) -> str:
             return f"{index + 1}. {entry.name}"
 
-        async def edit_original_response(item: SearchEntry, playback_id: int) -> None:
+        async def edit_original_response(item: SearchEntry, track: AudioTrack) -> None:
             if item.on_select_message.artwork_url:
                 embed, attachment = await self.__create_embed(item, options)
                 await interaction.edit_original_response(
                     content=None,
                     embed=embed,
                     attachments=[attachment],
-                    view=self.__playback_control_view(
-                        playback_id, item.url, options, interaction
-                    ),
+                    view=self.__playback_control_view(interaction, track),
                 )
             else:
                 message = ""
@@ -603,14 +596,18 @@ class DiscordCog(discord.ext.commands.Cog):
                 playback_id = self.next_playback_id
                 self.next_playback_id += 1
 
+                track = AudioTrack(
+                    url=item.url,
+                    title=item.name,
+                    playback_id=playback_id,
+                    playback_options=options,
+                )
+
                 try:
                     await self.__enqueue(
-                        await self.__voice_client(selection_interaction),
-                        playback_id,
-                        item.url,
-                        options=options,
+                        await self.__voice_client(selection_interaction), track
                     )
-                    await edit_original_response(item, playback_id)
+                    await edit_original_response(item, track)
                     dismissed = True
                 except discord.DiscordException as e:
                     print(f"[ ] interaction error: {e}")
@@ -649,6 +646,23 @@ class DiscordCog(discord.ext.commands.Cog):
         await interaction.response.send_message(
             f"```{message}```",
             view=view,
+        )
+
+    async def queue(self, interaction: discord.Interaction) -> None:
+        print("[ ] queue")
+        assert interaction.guild
+
+        tracks = (
+            await self.state[interaction.guild.id].enqueued_tracks()
+            if interaction.guild.id in self.state
+            else []
+        )
+        message = ""
+        for i, track in enumerate(tracks):
+            message += f"{i + 1}. {track.title}\n"
+
+        await interaction.response.send_message(
+            f"```{message}```" if message else "Empty.", ephemeral=True, delete_after=10
         )
 
     @discord.ext.commands.command()
@@ -768,9 +782,7 @@ class DiscordCog(discord.ext.commands.Cog):
     async def __enqueue(
         self,
         voice_client: discord.VoiceClient,
-        playback_id: int,
-        url: str,
-        options: PlaybackOptions,
+        track: AudioTrack,
     ) -> None:
         state = self.__guild_state(voice_client.guild.id)
-        await state.enqueue(voice_client, playback_id, url, options)
+        await state.enqueue(voice_client, track)
