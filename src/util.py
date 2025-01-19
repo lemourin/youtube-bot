@@ -72,3 +72,7 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
         embed.add_field(name="bassboost_factor", value=options.bassboost_factor)
     if options.filter_graph:
         embed.add_field(name="filter_graph", value=options.filter_graph)
+    if options.start_timestamp:
+        embed.add_field(name="start_timestamp", value=options.start_timestamp)
+    if options.stop_timestamp:
+        embed.add_field(name="stop_timestamp", value=options.stop_timestamp)

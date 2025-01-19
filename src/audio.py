@@ -9,9 +9,54 @@ import json
 import discord
 
 
+class PlaybackOptions:
+    NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
+    BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
+    FILTER_GRAPH_DOC = "Custom ffmpeg audio filtering graph."
+    START_TIMESTAMP = "Start timestamp of audio playback. e.g. 4:20"
+    STOP_TIMESTAMP = "Stop timestamp of audio playback. e.g. 4:20"
+
+    def __init__(
+        self,
+        nightcore_factor: float | None = None,
+        bassboost_factor: float | None = None,
+        filter_graph: str | None = None,
+        start_timestamp: str | None = None,
+        stop_timestamp: str | None = None,
+    ) -> None:
+        self.nightcore_factor = nightcore_factor
+        self.bassboost_factor = bassboost_factor
+        self.filter_graph = filter_graph
+        self.start_timestamp = start_timestamp
+        self.stop_timestamp = stop_timestamp
+
+    def __bool__(self) -> bool:
+        return (
+            self.nightcore_factor is not None
+            or self.bassboost_factor is not None
+            or self.filter_graph is not None
+            or self.start_timestamp is not None
+            or self.stop_timestamp is not None
+        )
+
+    def __str__(self) -> str:
+        message = ""
+        if self.nightcore_factor:
+            message += f"* nightcore_factor = {self.nightcore_factor}\n"
+        if self.bassboost_factor:
+            message += f"* bassboost_factor = {self.bassboost_factor}\n"
+        if self.filter_graph:
+            message += f"* filter_graph = {self.filter_graph}\n"
+        if self.start_timestamp:
+            message += f"* start_timestamp = {self.start_timestamp}\n"
+        if self.stop_timestamp:
+            message += f"* stop_timestamp = {self.stop_timestamp}\n"
+        return message
+
+
 class YTDLBuffer(io.BufferedIOBase):
-    def __init__(self, url: str) -> None:
-        self.proc = YTDLBuffer.create_process(url)
+    def __init__(self, url: str, options: PlaybackOptions) -> None:
+        self.proc = YTDLBuffer.create_process(url, options)
 
     @override
     def read(self, n: int | None = None) -> bytes:
@@ -25,7 +70,7 @@ class YTDLBuffer(io.BufferedIOBase):
         print("[ ] process cleaned up")
 
     @staticmethod
-    def create_process(url: str) -> subprocess.Popen[bytes]:
+    def create_process(url: str, options: PlaybackOptions) -> subprocess.Popen[bytes]:
         print(f"[ ] YTDLBuffer creating process for {url}")
         args = [
             "-x",
@@ -37,7 +82,22 @@ class YTDLBuffer(io.BufferedIOBase):
             url,
             "-o",
             "-",
+            "--download-sections",
+            "*from-url",
         ]
+        if options.start_timestamp is not None or options.stop_timestamp is not None:
+            range_opt = ""
+            range_opt += (
+                options.start_timestamp
+                if options.start_timestamp is not None
+                else "0:00"
+            )
+            range_opt += "-"
+            range_opt += (
+                options.stop_timestamp if options.stop_timestamp is not None else "inf"
+            )
+            args.append("--download-sections")
+            args.append(f"*{range_opt}")
         print("[ ] yt-dlp", *args)
         return subprocess.Popen(
             executable="yt-dlp",
@@ -45,39 +105,6 @@ class YTDLBuffer(io.BufferedIOBase):
             stdout=asyncio.subprocess.PIPE,
             bufsize=0,
         )
-
-
-class PlaybackOptions:
-    NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
-    BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
-    FILTER_GRAPH_DOC = "Custom ffmpeg audio filtering graph."
-
-    def __init__(
-        self,
-        nightcore_factor: float | None = None,
-        bassboost_factor: float | None = None,
-        filter_graph: str | None = None,
-    ) -> None:
-        self.nightcore_factor = nightcore_factor
-        self.bassboost_factor = bassboost_factor
-        self.filter_graph = filter_graph
-
-    def __bool__(self) -> bool:
-        return (
-            self.nightcore_factor is not None
-            or self.bassboost_factor is not None
-            or self.filter_graph is not None
-        )
-
-    def __str__(self) -> str:
-        message = ""
-        if self.nightcore_factor:
-            message += f"* nightcore_factor = {self.nightcore_factor}\n"
-        if self.bassboost_factor:
-            message += f"* bassboost_factor = {self.bassboost_factor}\n"
-        if self.filter_graph:
-            message += f"* filter_graph = {self.filter_graph}"
-        return message
 
 
 @dataclasses.dataclass
@@ -90,7 +117,7 @@ class AudioTrack:
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
     def __init__(self, url: str, options: PlaybackOptions) -> None:
-        self.buffer = YTDLBuffer(url)
+        self.buffer = YTDLBuffer(url, options)
 
         ffmpeg_options = ""
 
@@ -103,7 +130,7 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
             ffmpeg_options += opt
 
         if options.nightcore_factor:
-            probe = self.__probe(url)
+            probe = self.__probe(url, options)
             sample_rate = 44100
             for stream in probe["streams"]:
                 if stream["codec_type"] == "audio":
@@ -118,9 +145,9 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
             self.buffer, pipe=True, options=f"-vn -loglevel error {ffmpeg_options}"
         )
 
-    def __probe(self, url: str) -> dict:
+    def __probe(self, url: str, options: PlaybackOptions) -> dict:
         with (
-            YTDLBuffer.create_process(url) as input_process,
+            YTDLBuffer.create_process(url, options) as input_process,
             subprocess.Popen(
                 executable="ffprobe",
                 args=[

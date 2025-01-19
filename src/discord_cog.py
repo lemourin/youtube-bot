@@ -306,6 +306,8 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
         filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
+        start_timestamp=PlaybackOptions.START_TIMESTAMP,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP,
     )
     async def yt(
         self,
@@ -314,6 +316,8 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor: float | None,
         bassboost_factor: float | None,
         filter_graph: str | None,
+        start_timestamp: str | None,
+        stop_timestamp: str | None,
     ) -> None:
         print("[ ] yt app command")
         await self.__authorize_options(interaction, filter_graph)
@@ -321,6 +325,8 @@ class DiscordCog(discord.ext.commands.Cog):
             nightcore_factor=nightcore_factor,
             bassboost_factor=bassboost_factor,
             filter_graph=filter_graph,
+            start_timestamp=start_timestamp,
+            stop_timestamp=stop_timestamp,
         )
         if validators.url(query):
             playback_id = self.next_playback_id
@@ -393,6 +399,8 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
         filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
+        start_timestamp=PlaybackOptions.START_TIMESTAMP,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP,
     )
     async def jf(
         self,
@@ -401,6 +409,8 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor: float | None,
         bassboost_factor: float | None,
         filter_graph: str | None,
+        start_timestamp: str | None,
+        stop_timestamp: str | None,
     ) -> None:
         print(f"[ ] jf {query}")
         await self.__authorize_options(interaction, filter_graph)
@@ -449,6 +459,8 @@ class DiscordCog(discord.ext.commands.Cog):
                 nightcore_factor=nightcore_factor,
                 bassboost_factor=bassboost_factor,
                 filter_graph=filter_graph,
+                start_timestamp=start_timestamp,
+                stop_timestamp=stop_timestamp,
             ),
         )
 
