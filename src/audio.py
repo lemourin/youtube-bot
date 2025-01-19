@@ -42,15 +42,15 @@ class PlaybackOptions:
     def __str__(self) -> str:
         message = ""
         if self.nightcore_factor:
-            message += f"* nightcore_factor = {self.nightcore_factor}\n"
+            message += f"> * `nightcore_factor:    {self.nightcore_factor}`\n"
         if self.bassboost_factor:
-            message += f"* bassboost_factor = {self.bassboost_factor}\n"
+            message += f"> * `bassboost_factor:    {self.bassboost_factor}`\n"
         if self.filter_graph:
-            message += f"* filter_graph = {self.filter_graph}\n"
+            message += f"> * `filter_graph:        {self.filter_graph}`\n"
         if self.start_timestamp:
-            message += f"* start_timestamp = {self.start_timestamp}\n"
+            message += f"> * `start_timestamp:     {self.start_timestamp}`\n"
         if self.stop_timestamp:
-            message += f"* stop_timestamp = {self.stop_timestamp}\n"
+            message += f"> * `stop_timestamp:      {self.stop_timestamp}`\n"
         return message
 
 
