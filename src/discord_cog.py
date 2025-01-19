@@ -519,18 +519,20 @@ class DiscordCog(discord.ext.commands.Cog):
             await interaction.edit_original_response(view=None)
 
         view = View(on_timeout=on_timeout, timeout=300)
-        skip_button = ButtonView(
-            style=discord.ButtonStyle.red,
-            label="Skip",
-            callback=on_skip,
+        view.add_item(
+            ButtonView(
+                style=discord.ButtonStyle.red,
+                label="Skip",
+                callback=on_skip,
+            )
         )
-        view.add_item(skip_button)
-        play_now_button = ButtonView(
-            style=discord.ButtonStyle.blurple,
-            label="Play Now",
-            callback=on_play_now,
+        view.add_item(
+            ButtonView(
+                style=discord.ButtonStyle.blurple,
+                label="Play Now",
+                callback=on_play_now,
+            )
         )
-        view.add_item(play_now_button)
         return view
 
     async def __search_result_select(
@@ -568,12 +570,29 @@ class DiscordCog(discord.ext.commands.Cog):
                     message += f"\n{options}"
                 await interaction.edit_original_response(content=message, view=None)
 
+        dismissed = False
+        dismissed_lock = asyncio.Lock()
+
+        async def on_timeout():
+            nonlocal dismissed
+            async with dismissed_lock:
+                if not dismissed:
+                    await interaction.delete_original_response()
+                    dismissed = True
+
+        view = View(on_timeout=on_timeout, timeout=30)
+
         async def on_selected(selection_interaction: discord.Interaction) -> None:
+            nonlocal dismissed
             if interaction.user.id != selection_interaction.user.id:
                 return await selection_interaction.response.send_message(
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
-            try:
+            async with dismissed_lock:
+                if dismissed:
+                    await selection_interaction.response.defer()
+                    return
+
                 item = [
                     entry
                     for index, entry in enumerate(entries)
@@ -584,17 +603,19 @@ class DiscordCog(discord.ext.commands.Cog):
                 playback_id = self.next_playback_id
                 self.next_playback_id += 1
 
-                await self.__enqueue(
-                    await self.__voice_client(selection_interaction),
-                    playback_id,
-                    item.url,
-                    options=options,
-                )
-                await edit_original_response(item, playback_id)
-            except discord.DiscordException as e:
-                print(f"[ ] Interaction error: {e}")
-                await interaction.edit_original_response(view=view)
-            await selection_interaction.response.defer()
+                try:
+                    await self.__enqueue(
+                        await self.__voice_client(selection_interaction),
+                        playback_id,
+                        item.url,
+                        options=options,
+                    )
+                    await edit_original_response(item, playback_id)
+                    dismissed = True
+                except discord.DiscordException as e:
+                    print(f"[ ] interaction error: {e}")
+                    await interaction.edit_original_response(view=view)
+                await selection_interaction.response.defer()
 
         select = SelectView(callback=on_selected)
         message = ""
@@ -612,11 +633,18 @@ class DiscordCog(discord.ext.commands.Cog):
                 ),
             )
 
-        async def on_timeout():
+        async def on_reject(button_interaction: discord.Interaction):
+            await button_interaction.response.defer()
             await interaction.delete_original_response()
 
-        view = View(on_timeout=on_timeout, timeout=30)
         view.add_item(select)
+        view.add_item(
+            ButtonView(
+                callback=on_reject,
+                label="Cancel",
+                style=discord.ButtonStyle.red,
+            )
+        )
 
         await interaction.response.send_message(
             f"```{message}```",
