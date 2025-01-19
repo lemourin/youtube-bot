@@ -475,27 +475,42 @@ class DiscordCog(discord.ext.commands.Cog):
                 "not authorized to use filter_graph option"
             )
 
+    def __create_embed_ui(
+        self, item: SearchEntry, options: PlaybackOptions, image: io.BytesIO | None
+    ) -> Tuple[discord.Embed, list[discord.File]]:
+        embed = discord.Embed(
+            title=item.on_select_message.title,
+            url=item.on_select_message.url,
+            color=item.on_select_message.color,
+        )
+        embed.set_author(
+            name=item.on_select_message.author_name,
+            url=item.on_select_message.author_url,
+        )
+        add_to_embed(embed, options)
+        files: list[discord.File] = []
+        if image:
+            embed.set_image(url="attachment://artwork.jpg")
+            files = [
+                discord.File(
+                    image,
+                    filename="artwork.jpg",
+                )
+            ]
+        return embed, files
+
     async def __create_embed(
         self, item: SearchEntry, options: PlaybackOptions
-    ) -> Tuple[discord.Embed, discord.File]:
-        assert item.on_select_message.artwork_url
-        async with await self.http.get(item.on_select_message.artwork_url) as image:
-            image.raise_for_status()
-            embed = discord.Embed(
-                title=item.on_select_message.title,
-                url=item.on_select_message.url,
-                color=item.on_select_message.color,
-            )
-            embed.set_author(
-                name=item.on_select_message.author_name,
-                url=item.on_select_message.author_url,
-            )
-            embed.set_image(url="attachment://artwork.jpg")
-            add_to_embed(embed, options)
-            return embed, discord.File(
-                io.BytesIO(await image.content.read()),
-                filename="artwork.jpg",
-            )
+    ) -> Tuple[discord.Embed, list[discord.File]]:
+        image: io.BytesIO | None = None
+        if item.on_select_message.artwork_url:
+            async with await self.http.get(
+                item.on_select_message.artwork_url
+            ) as response:
+                if response.ok:
+                    image = io.BytesIO(await response.content.read())
+                    return self.__create_embed_ui(item, options, image)
+        return self.__create_embed_ui(item, options, image=None)
 
     def __playback_control_view(
         self,
@@ -557,24 +572,6 @@ class DiscordCog(discord.ext.commands.Cog):
         def option_label(index: int, entry: SearchEntry) -> str:
             return f"{index + 1}. {entry.name}"
 
-        async def edit_original_response(item: SearchEntry, track: AudioTrack) -> None:
-            if item.on_select_message.artwork_url:
-                embed, attachment = await self.__create_embed(item, options)
-                await interaction.edit_original_response(
-                    content=None,
-                    embed=embed,
-                    attachments=[attachment],
-                    view=self.__playback_control_view(interaction, track),
-                )
-            else:
-                message = ""
-                if item.on_select_message.author_name:
-                    message += f"{item.on_select_message.author_name} - "
-                message += item.on_select_message.title
-                if options:
-                    message += f"\n{options}"
-                await interaction.edit_original_response(content=message, view=None)
-
         dismissed = False
         dismissed_lock = asyncio.Lock()
 
@@ -619,7 +616,13 @@ class DiscordCog(discord.ext.commands.Cog):
                     await self.__enqueue(
                         await self.__voice_client(selection_interaction), track
                     )
-                    await edit_original_response(item, track)
+                    embed, attachments = await self.__create_embed(item, options)
+                    await interaction.edit_original_response(
+                        content=None,
+                        embed=embed,
+                        attachments=attachments,
+                        view=self.__playback_control_view(interaction, track),
+                    )
                     dismissed = True
                 except discord.DiscordException as e:
                     print(f"[ ] interaction error: {e}")
