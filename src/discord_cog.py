@@ -308,6 +308,12 @@ class DiscordCog(discord.ext.commands.Cog):
         async def message_content_with_link_preview() -> MessageContent | None:
             try:
                 async with self.http.get(url) as data:
+                    if (
+                        data.content_type != "text/html"
+                        or not data.content_length
+                        or data.content_length > 1024 * 1024
+                    ):
+                        return None
                     preview = await asyncio.to_thread(
                         link_preview, url=url, content=await data.read()
                     )
@@ -541,7 +547,11 @@ class DiscordCog(discord.ext.commands.Cog):
             and message_content.artwork_url.startswith(self.jellyfin_client.address)
         ):
             async with await self.http.get(message_content.artwork_url) as response:
-                if response.ok:
+                if (
+                    response.ok
+                    and response.content_length
+                    and response.content_length <= 10 * 1024 * 1024
+                ):
                     image = io.BytesIO(await response.content.read())
                     return self.__create_embed_ui(message_content, options, image)
         return self.__create_embed_ui(
