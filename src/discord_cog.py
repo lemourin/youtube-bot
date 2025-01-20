@@ -510,7 +510,6 @@ class DiscordCog(discord.ext.commands.Cog):
             title=message_content.title,
             url=message_content.url,
             color=message_content.color,
-            description=message_content.description,
         )
         if message_content.author_name is not None:
             embed.set_author(
