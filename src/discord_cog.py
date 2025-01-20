@@ -314,8 +314,8 @@ class DiscordCog(discord.ext.commands.Cog):
                     return MessageContent(
                         title=preview.title,
                         artwork_url=preview.image,
-                        author_name=preview.site_name,
                         url=url,
+                        footer=preview.site_name,
                     )
             except aiohttp.web.HTTPException as e:
                 print(f"[ ] preview error {e}")
@@ -333,6 +333,7 @@ class DiscordCog(discord.ext.commands.Cog):
             m1.author_name = m1.author_name if m1.author_name else m2.author_name
             m1.author_url = m1.author_url if m1.author_url else m2.author_url
             m1.url = m1.url if m1.url else m2.url
+            m1.footer = m1.footer if m1.footer else m2.footer
             return m1
 
         message_content = await create_message_content()
@@ -464,6 +465,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         ),
                         author_name=artist_name,
                         color=discord.Color.blue(),
+                        footer="Jellyfin",
                     ),
                     duration=entry["RunTimeTicks"] // 10_000_000,
                 )
@@ -507,6 +509,8 @@ class DiscordCog(discord.ext.commands.Cog):
                 name=message_content.author_name,
                 url=message_content.author_url,
             )
+        if message_content.footer is not None:
+            embed.set_footer(text=message_content.footer)
         add_to_embed(embed, options)
         files: list[discord.File] = []
         if isinstance(image, io.BytesIO):

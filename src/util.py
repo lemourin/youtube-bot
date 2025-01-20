@@ -17,6 +17,7 @@ class MessageContent:
     color: discord.Color | None = None
     author_name: str | None = None
     author_url: str | None = None
+    footer: str | None = None
 
 
 @dataclasses.dataclass
@@ -135,6 +136,7 @@ def yt_item_to_search_item(entry: dict) -> SearchEntry:
             color=discord.Color.red(),
             author_name=entry["snippet"]["channelTitle"],
             author_url=author_url,
+            footer="YouTube",
         ),
         duration=iso8601_to_unix_timestamp(entry["contentDetails"]["duration"]),
     )
