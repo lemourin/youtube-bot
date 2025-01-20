@@ -11,6 +11,7 @@ import validators
 from linkpreview import link_preview  # type: ignore
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions, AudioTrack
 from src.util import (
+    read_at_most,
     yt_video_data_from_url,
     yt_item_to_search_item,
     jf_best_thumbnail_url,
@@ -309,14 +310,12 @@ class DiscordCog(discord.ext.commands.Cog):
         async def message_content_with_link_preview() -> MessageContent | None:
             try:
                 async with self.http.get(url) as data:
-                    if (
-                        data.content_type != "text/html"
-                        or not data.content_length
-                        or data.content_length > 1024 * 1024
-                    ):
+                    if data.content_type != "text/html":
                         return None
                     preview = await asyncio.to_thread(
-                        link_preview, url=url, content=await data.read()
+                        link_preview,
+                        url=url,
+                        content=await read_at_most(data.content, 1024 * 1024),
                     )
                     return MessageContent(
                         title=preview.title,
@@ -544,12 +543,10 @@ class DiscordCog(discord.ext.commands.Cog):
             and message_content.artwork_url.startswith(self.jellyfin_client.address)
         ):
             async with await self.http.get(message_content.artwork_url) as response:
-                if (
-                    response.ok
-                    and response.content_length
-                    and response.content_length <= 10 * 1024 * 1024
-                ):
-                    image = io.BytesIO(await response.content.read())
+                if response.ok:
+                    image = io.BytesIO(
+                        await read_at_most(response.content, 10 * 1024 * 1024)
+                    )
                     return self.__create_embed_ui(message_content, options, image)
         return self.__create_embed_ui(
             message_content, options, image=message_content.artwork_url

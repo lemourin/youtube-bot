@@ -5,6 +5,7 @@ import json
 import html
 import dataclasses
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
+import aiohttp
 import discord
 from src.audio import PlaybackOptions
 
@@ -141,3 +142,12 @@ def yt_item_to_search_item(entry: dict) -> SearchEntry:
         ),
         duration=iso8601_to_unix_timestamp(entry["contentDetails"]["duration"]),
     )
+
+
+async def read_at_most(stream: aiohttp.streams.StreamReader, n: int) -> bytes:
+    blocks: list[bytes] = []
+    while n > 0 and not stream.at_eof():
+        chunk = await stream.read(n)
+        blocks.append(chunk)
+        n -= len(chunk)
+    return b"".join(blocks)
