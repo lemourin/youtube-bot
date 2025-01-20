@@ -9,6 +9,7 @@ import json
 import discord
 
 
+@dataclasses.dataclass
 class PlaybackOptions:
     NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
     BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
@@ -16,42 +17,11 @@ class PlaybackOptions:
     START_TIMESTAMP = "Start timestamp of audio playback. e.g. 4:20"
     STOP_TIMESTAMP = "Stop timestamp of audio playback. e.g. 4:20"
 
-    def __init__(
-        self,
-        nightcore_factor: float | None = None,
-        bassboost_factor: float | None = None,
-        filter_graph: str | None = None,
-        start_timestamp: str | None = None,
-        stop_timestamp: str | None = None,
-    ) -> None:
-        self.nightcore_factor = nightcore_factor
-        self.bassboost_factor = bassboost_factor
-        self.filter_graph = filter_graph
-        self.start_timestamp = start_timestamp
-        self.stop_timestamp = stop_timestamp
-
-    def __bool__(self) -> bool:
-        return (
-            self.nightcore_factor is not None
-            or self.bassboost_factor is not None
-            or self.filter_graph is not None
-            or self.start_timestamp is not None
-            or self.stop_timestamp is not None
-        )
-
-    def __str__(self) -> str:
-        message = ""
-        if self.nightcore_factor:
-            message += f"> * `nightcore_factor:    {self.nightcore_factor}`\n"
-        if self.bassboost_factor:
-            message += f"> * `bassboost_factor:    {self.bassboost_factor}`\n"
-        if self.filter_graph:
-            message += f"> * `filter_graph:        {self.filter_graph}`\n"
-        if self.start_timestamp:
-            message += f"> * `start_timestamp:     {self.start_timestamp}`\n"
-        if self.stop_timestamp:
-            message += f"> * `stop_timestamp:      {self.stop_timestamp}`\n"
-        return message
+    nightcore_factor: float | None = None
+    bassboost_factor: float | None = None
+    filter_graph: str | None = None
+    start_timestamp: str | None = None
+    stop_timestamp: str | None = None
 
 
 class YTDLBuffer(io.BufferedIOBase):

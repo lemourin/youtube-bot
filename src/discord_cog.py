@@ -316,6 +316,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         artwork_url=preview.image,
                         url=url,
                         footer=preview.site_name,
+                        description=preview.description,
                     )
             except aiohttp.web.HTTPException as e:
                 print(f"[ ] preview error {e}")
@@ -329,11 +330,12 @@ class DiscordCog(discord.ext.commands.Cog):
                 return m2
             if not m2:
                 return m1
-            m1.artwork_url = m1.artwork_url if m1.artwork_url else m2.artwork_url
-            m1.author_name = m1.author_name if m1.author_name else m2.author_name
-            m1.author_url = m1.author_url if m1.author_url else m2.author_url
-            m1.url = m1.url if m1.url else m2.url
-            m1.footer = m1.footer if m1.footer else m2.footer
+            m1.artwork_url = m1.artwork_url or m2.artwork_url
+            m1.author_name = m1.author_name or m2.author_name
+            m1.author_url = m1.author_url or m2.author_url
+            m1.url = m1.url or m2.url
+            m1.footer = m1.footer or m2.footer
+            m1.description = m1.description or m2.description
             return m1
 
         message_content = await create_message_content()
@@ -347,8 +349,11 @@ class DiscordCog(discord.ext.commands.Cog):
                 files=attachments,
                 view=self.__playback_control_view(interaction, track),
             )
+
+        embed = discord.Embed(title=url, url=url)
+        add_to_embed(embed, options)
         await interaction.followup.send(
-            content=f"{url}{f"\n{options}" if options else ""}",
+            embed=embed,
             view=self.__playback_control_view(interaction, track),
         )
 
@@ -503,6 +508,7 @@ class DiscordCog(discord.ext.commands.Cog):
             title=message_content.title,
             url=message_content.url,
             color=message_content.color,
+            description=message_content.description,
         )
         if message_content.author_name is not None:
             embed.set_author(

@@ -18,6 +18,7 @@ class MessageContent:
     author_name: str | None = None
     author_url: str | None = None
     footer: str | None = None
+    description: str | None = None
 
 
 @dataclasses.dataclass
