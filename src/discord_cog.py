@@ -7,6 +7,7 @@ import aiohttp
 import discord
 import discord.ext.commands
 import validators
+from linkpreview import link_preview  # type: ignore
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions, AudioTrack
 from src.util import (
     yt_video_data_from_url,
@@ -291,34 +292,60 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.__enqueue(await self.__voice_client(interaction), track)
         await interaction.response.defer()
 
-        try:
+        async def message_content_with_yt_dlp() -> MessageContent | None:
             details = await asyncio.to_thread(yt_video_data_from_url, url)
-            if details is not None and all(
-                x in details
-                for x in [
-                    "title",
-                    "thumbnail",
-                ]
-            ):
-                embed, attachments = await self.__create_embed(
-                    MessageContent(
-                        title=details["title"],
-                        artwork_url=details["thumbnail"],
-                        author_name=details.get("uploader"),
-                        author_url=details.get("uploader_url"),
-                        color=discord.Color.red(),
-                        url=details.get("original_url"),
-                    ),
-                    options,
-                )
-                return await interaction.followup.send(
-                    embed=embed,
-                    files=attachments,
-                    view=self.__playback_control_view(interaction, track),
-                )
-        except discord.DiscordException as e:
-            print(f"[ ] interaction error {e}")
+            if details is None or "title" not in details:
+                return None
+            return MessageContent(
+                title=details["title"],
+                artwork_url=details.get("thumbnail"),
+                author_name=details.get("uploader"),
+                author_url=details.get("uploader_url"),
+                color=discord.Color.red(),
+                url=details.get("original_url"),
+            )
 
+        async def message_content_with_link_preview() -> MessageContent | None:
+            try:
+                async with self.http.get(url) as data:
+                    preview = await asyncio.to_thread(
+                        link_preview, url=url, content=await data.read()
+                    )
+                    return MessageContent(
+                        title=preview.title,
+                        artwork_url=preview.image,
+                        author_name=preview.site_name,
+                        url=url,
+                    )
+            except aiohttp.web.HTTPException as e:
+                print(f"[ ] preview error {e}")
+            return None
+
+        async def create_message_content() -> MessageContent | None:
+            m1, m2 = await asyncio.gather(
+                message_content_with_yt_dlp(), message_content_with_link_preview()
+            )
+            if not m1:
+                return m2
+            if not m2:
+                return m1
+            m1.artwork_url = m1.artwork_url if m1.artwork_url else m2.artwork_url
+            m1.author_name = m1.author_name if m1.author_name else m2.author_name
+            m1.author_url = m1.author_url if m1.author_url else m2.author_url
+            m1.url = m1.url if m1.url else m2.url
+            return m1
+
+        message_content = await create_message_content()
+        if message_content:
+            embed, attachments = await self.__create_embed(
+                message_content,
+                options,
+            )
+            return await interaction.followup.send(
+                embed=embed,
+                files=attachments,
+                view=self.__playback_control_view(interaction, track),
+            )
         await interaction.followup.send(
             content=f"{url}{f"\n{options}" if options else ""}",
             view=self.__playback_control_view(interaction, track),

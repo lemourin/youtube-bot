@@ -16,6 +16,7 @@ dependencies = [
     "validators",
     "google-api-python-client",
     "pynacl",
+    "linkpreview",
 ]
 
 [tool.pylint."MESSAGES CONTROL"]
