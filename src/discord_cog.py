@@ -2,6 +2,7 @@ import asyncio
 from typing import cast, override, Callable, Awaitable, Dict, Any, Tuple
 import io
 import sys
+from urllib.parse import urlparse
 from concurrent.futures import Executor
 import aiohttp
 import discord
@@ -345,21 +346,17 @@ class DiscordCog(discord.ext.commands.Cog):
             return m1
 
         message_content = await create_message_content()
-        if message_content:
-            embed, attachments = await self.__create_embed(
-                message_content,
-                options,
-            )
-            return await interaction.followup.send(
-                embed=embed,
-                files=attachments,
-                view=self.__playback_control_view(interaction, track),
-            )
-
-        embed = discord.Embed(title=url, url=url)
-        add_to_embed(embed, options)
-        await interaction.followup.send(
+        if message_content is None:
+            message_content = MessageContent(title=url, url=url)
+        if message_content.footer is None:
+            message_content.footer = urlparse(url).hostname
+        embed, attachments = await self.__create_embed(
+            message_content,
+            options,
+        )
+        return await interaction.followup.send(
             embed=embed,
+            files=attachments,
             view=self.__playback_control_view(interaction, track),
         )
 
