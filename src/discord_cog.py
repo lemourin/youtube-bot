@@ -94,6 +94,10 @@ class GuildState:
 
         print("[ ] voice client not playing, starting")
         self._is_playing = True
+        if self._source:
+            source = self._source
+            self._source = None
+            await asyncio.to_thread(source.cleanup)
         self._source = await asyncio.to_thread(
             lambda: YTDLSource(
                 self._queue,
@@ -102,7 +106,7 @@ class GuildState:
             )
         )
 
-        def finalizer(self, err):
+        def finalizer(self: GuildState, err: Exception | None):
             if err:
                 print(f"[!] player error: {err}")
             else:

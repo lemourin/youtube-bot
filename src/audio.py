@@ -150,6 +150,7 @@ class LazyAudioSource(discord.AudioSource):
     def __init__(self, track: AudioTrack) -> None:
         self.track = track
         self.source: discord.AudioSource | None = None
+        self.lock = threading.Lock()
 
     def prefetch(self) -> None:
         if self.source is None:
