@@ -89,7 +89,7 @@ class GuildState:
         await self._start(voice_client)
 
     async def _start(self, voice_client: discord.VoiceClient) -> None:
-        if self._is_playing:
+        if self._source and not self._source.buffered_audio.is_done():
             return
 
         print("[ ] voice client not playing, starting")
@@ -170,7 +170,6 @@ class GuildState:
             if self._source is not None:
                 self._source.cleanup()
             self._queue.cleanup()
-            self._queue.clear()
 
     def set_volume(self, value: float) -> None:
         self._volume = value

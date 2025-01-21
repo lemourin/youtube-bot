@@ -2,7 +2,7 @@ import subprocess
 import threading
 import asyncio
 import dataclasses
-from typing import cast, override
+from typing import cast, override, Callable
 import io
 from concurrent.futures import Executor
 import json
@@ -153,117 +153,149 @@ class LazyAudioSource(discord.AudioSource):
         self.lock = threading.Lock()
 
     def prefetch(self) -> None:
+        with self.lock:
+            self._prefetch()
+
+    def _prefetch(self) -> None:
         if self.source is None:
             self.source = YTDLStreamAudio(self.track.url, self.track.playback_options)
 
     @override
     def cleanup(self) -> None:
-        if self.source:
-            self.source.cleanup()
-            self.source = None
+        with self.lock:
+            if self.source:
+                self.source.cleanup()
+                self.source = None
 
     @override
     def read(self) -> bytes:
-        self.prefetch()
-        assert self.source
-        return self.source.read()
+        with self.lock:
+            self._prefetch()
+            assert self.source
+            return self.source.read()
+
+
+async def _invoke(callbacks: list[Callable[[], None]]):
+    def f():
+        for i in callbacks:
+            i()
+
+    await asyncio.to_thread(f)
 
 
 class YTDLQueuedStreamAudio(discord.AudioSource):
     def __init__(self) -> None:
         super().__init__()
         self.queue: list[LazyAudioSource] = []
+        self.lock = threading.Lock()
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
 
     async def add(self, track: AudioTrack) -> None:
-        print(f"[ ] adding {track.url} to queue")
-        self.queue.append(LazyAudioSource(track))
-        if len(self.queue) == 2:
-            e = self.queue[1]
-            await asyncio.to_thread(e.prefetch)
+        callbacks = []
+        with self.lock:
+            print(f"[ ] adding {track.url} to queue")
+            self.queue.append(LazyAudioSource(track))
+            if len(self.queue) >= 2:
+                callbacks.append(self.queue[1].prefetch)
+        await _invoke(callbacks)
 
     async def prepend(self, track: AudioTrack) -> None:
-        print(f"[ ] prepending {track.url} to queue")
-        e = LazyAudioSource(track)
-        self.queue.insert(0, e)
-        await asyncio.to_thread(e.prefetch)
-        if len(self.queue) == 3:
-            e = self.queue[2]
-            await asyncio.to_thread(e.cleanup)
+        callbacks = []
+        with self.lock:
+            print(f"[ ] prepending {track.url} to queue")
+            e = LazyAudioSource(track)
+            self.queue.insert(0, e)
+            callbacks.append(e.prefetch)
+            if len(self.queue) >= 3:
+                callbacks.append(self.queue[2].cleanup)
+
+        await _invoke(callbacks)
 
     async def move(self, playback_id: int, target_position: int) -> None:
-        d = self.current_position(playback_id)
-        if d is None or d == target_position:
-            return
+        callbacks = []
+        with self.lock:
+            d = self._current_position(playback_id)
+            if d is None or d == target_position:
+                return
 
-        a = self.queue[d]
-        self.queue.pop(d)
-        self.queue.insert(target_position, a)
-        await asyncio.to_thread(a.prefetch)
+            e = self.queue[d]
+            self.queue.pop(d)
+            self.queue.insert(target_position, e)
+            if target_position == 0:
+                callbacks.append(e.prefetch)
+            elif target_position >= 2:
+                callbacks.append(e.cleanup)
 
-        if len(self.queue) > 1:
-            e = self.queue[1]
-            await asyncio.to_thread(e.prefetch)
+            if len(self.queue) >= 2:
+                callbacks.append(self.queue[1].prefetch)
+            if len(self.queue) >= 3:
+                callbacks.append(self.queue[2].cleanup)
 
-    def clear(self) -> None:
-        print("[ ] clearing queue")
-        trash = self.queue
-        self.queue = []
-        for a in trash:
-            a.cleanup()
+        await _invoke(callbacks)
 
     def current_playback_id(self) -> int | None:
-        if not self.queue:
-            return None
-        return self.queue[0].track.playback_id
+        with self.lock:
+            if not self.queue:
+                return None
+            return self.queue[0].track.playback_id
 
     def current_position(self, playback_id: int) -> int | None:
+        with self.lock:
+            return self._current_position(playback_id)
+
+    def _current_position(self, playback_id: int) -> int | None:
         for i, e in enumerate(self.queue):
             if e.track.playback_id == playback_id:
                 return i
         return None
 
     async def skip(self, playback_id: int | None = None) -> None:
-        if not self.queue:
-            return
+        callbacks = []
+        with self.lock:
+            if not self.queue:
+                return
 
-        d = None
-        if playback_id is None:
-            d = 0
-        else:
-            d = self.current_position(playback_id)
+            d = None
+            if playback_id is None:
+                d = 0
+            else:
+                d = self._current_position(playback_id)
 
-        if d is None:
-            return
+            if d is None:
+                return
 
-        a = self.queue[d]
-        self.queue.pop(d)
-        await asyncio.to_thread(a.cleanup)
+            callbacks.append(self.queue[d].cleanup)
+            self.queue.pop(d)
 
-        if len(self.queue) > 1:
-            e = self.queue[1]
-            await asyncio.to_thread(e.prefetch)
+            if len(self.queue) >= 1:
+                callbacks.append(self.queue[0].prefetch)
+
+            if len(self.queue) >= 2:
+                callbacks.append(self.queue[1].prefetch)
+
+        await _invoke(callbacks)
 
     @override
     def read(self) -> bytes:
-        # print("[ ] YTDLQueuedStreamAudio read")
-        trash = None
-        if not self.queue:
-            print("[ ] queue empty")
-            return b""
-        c = self.queue[0].read()
-        # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
-        if len(c) < self.read_size:
-            if len(self.queue) > 1:
-                c = c + self.zeros[len(c) :]
-            trash = self.queue[0]
-            print("[ ] advancing queue")
-            self.queue = self.queue[1:]
-            if len(self.queue) > 1:
-                self.queue[1].prefetch()
-        if trash is not None:
-            trash.cleanup()
+        callbacks = []
+        with self.lock:
+            # print("[ ] YTDLQueuedStreamAudio read")
+            if not self.queue:
+                print("[ ] queue empty")
+                return b""
+            c = self.queue[0].read()
+            # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
+            if len(c) < self.read_size:
+                if len(self.queue) > 1:
+                    c = c + self.zeros[len(c) :]
+                callbacks.append(self.queue[0].cleanup)
+                print("[ ] advancing queue")
+                self.queue = self.queue[1:]
+                if len(self.queue) >= 2:
+                    callbacks.append(self.queue[1].prefetch)
+        for i in callbacks:
+            i()
         return c
 
     @override
@@ -272,11 +304,11 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 
     @override
     def cleanup(self) -> None:
-        print("[ ] YTDLQueuedStreamAudio cleanup")
-        trash = self.queue
-        self.queue = []
-        for a in trash:
-            cast(YTDLStreamAudio, a).cleanup()
+        with self.lock:
+            print("[ ] YTDLQueuedStreamAudio cleanup")
+            for a in self.queue:
+                cast(YTDLStreamAudio, a).cleanup()
+            self.queue = []
 
 
 class BufferedAudioSource(discord.AudioSource):
@@ -290,35 +322,47 @@ class BufferedAudioSource(discord.AudioSource):
         self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
+        self.chunks_to_skip = 0
         self.future = self.executor.submit(self.__fetcher_task)
         with self.chunk_sem:
             pass
 
     def drain(self) -> None:
         with self.access_sem:
-            self.chunks.clear()
-            self.cv.notify()
+            self.chunks_to_skip = len(self.chunks)
+
+    def is_done(self) -> bool:
+        with self.access_sem:
+            return self.done
 
     @override
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
         self.chunk_sem.acquire()
-        with self.access_sem:
-            if not self.chunks:
-                print("[ ] BufferedAudioSource finished")
-                self.chunk_sem.release()
-                return b""
-            c = self.chunks[0]
-            self.chunks = self.chunks[1:]
-            if len(self.chunks) == self.max_chunk_count - 1:
-                self.cv.notify()
-            return c
+        self.access_sem.acquire()
+
+        if not self.chunks:
+            print("[ ] BufferedAudioSource finished")
+            self.chunk_sem.release()
+            self.access_sem.release()
+            return b""
+
+        c = self.chunks[0]
+        self.chunks = self.chunks[1:]
+        if len(self.chunks) == self.max_chunk_count - 1:
+            self.cv.notify()
+
+        if self.chunks_to_skip > 0:
+            self.chunks_to_skip -= 1
+            self.access_sem.release()
+            return self.read()
+
+        self.access_sem.release()
+        return c
 
     @override
     def cleanup(self) -> None:
         print("[ ] BufferedAudioSource cleanup")
-        if not self.future:
-            return
         with self.access_sem:
             self.done = True
             self.cv.notify()
@@ -342,6 +386,7 @@ class BufferedAudioSource(discord.AudioSource):
             data = self.source.read()
             if len(data) == 0:
                 self.chunk_sem.release(chunks_pending + 1)
+                self.done = True
                 print("[ ] BufferedAudioSource fetcher stopped, finished")
                 break
             with self.access_sem:
