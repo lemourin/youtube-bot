@@ -139,24 +139,16 @@ class GuildState:
             self._source.buffered_audio.drain()
         await self._queue.skip(playback_id)
 
-    async def _move_track(self, playback_id: int, target_position: int) -> None:
-        if target_position == 0 and playback_id != self._queue.current_playback_id():
-            await self._skip()
-        await self._queue.move(playback_id, target_position)
-
     async def play_now(
         self,
         voice_client: discord.VoiceClient,
         track: AudioTrack,
     ) -> None:
         async with self._queue_lock:
-            if self._queue.current_position(track.playback_id) is not None:
-                await self._move_track(track.playback_id, target_position=0)
-                await self._start(voice_client)
-            else:
-                await self._skip()
-                await self._queue.prepend(track)
-                await self._start(voice_client)
+            if self._source is not None:
+                self._source.buffered_audio.drain()
+            await self._queue.play_now(track)
+            await self._start(voice_client)
 
     async def current_playback_id(self) -> int | None:
         async with self._queue_lock:

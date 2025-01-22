@@ -196,8 +196,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         with self.lock:
             print(f"[ ] adding {track.url} to queue")
             self.queue.append(LazyAudioSource(track))
-            if len(self.queue) >= 2:
-                callbacks.append(self.queue[1].prefetch)
+            callbacks += self.__prefetch()
         await _invoke(callbacks)
 
     async def prepend(self, track: AudioTrack) -> None:
@@ -206,49 +205,9 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             print(f"[ ] prepending {track.url} to queue")
             e = LazyAudioSource(track)
             self.queue.insert(0, e)
-            callbacks.append(e.prefetch)
-            if len(self.queue) >= 3:
-                callbacks.append(self.queue[2].cleanup)
+            callbacks += self.__prefetch()
 
         await _invoke(callbacks)
-
-    async def move(self, playback_id: int, target_position: int) -> None:
-        callbacks = []
-        with self.lock:
-            d = self._current_position(playback_id)
-            if d is None or d == target_position:
-                return
-
-            e = self.queue[d]
-            self.queue.pop(d)
-            self.queue.insert(target_position, e)
-            if target_position == 0:
-                callbacks.append(e.prefetch)
-            elif target_position >= 2:
-                callbacks.append(e.cleanup)
-
-            if len(self.queue) >= 2:
-                callbacks.append(self.queue[1].prefetch)
-            if len(self.queue) >= 3:
-                callbacks.append(self.queue[2].cleanup)
-
-        await _invoke(callbacks)
-
-    def current_playback_id(self) -> int | None:
-        with self.lock:
-            if not self.queue:
-                return None
-            return self.queue[0].track.playback_id
-
-    def current_position(self, playback_id: int) -> int | None:
-        with self.lock:
-            return self._current_position(playback_id)
-
-    def _current_position(self, playback_id: int) -> int | None:
-        for i, e in enumerate(self.queue):
-            if e.track.playback_id == playback_id:
-                return i
-        return None
 
     async def skip(self, playback_id: int | None = None) -> None:
         callbacks = []
@@ -260,7 +219,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             if playback_id is None:
                 d = 0
             else:
-                d = self._current_position(playback_id)
+                d = self.__current_position(playback_id)
 
             if d is None:
                 return
@@ -268,11 +227,45 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             callbacks.append(self.queue[d].cleanup)
             self.queue.pop(d)
 
-            if len(self.queue) >= 1:
-                callbacks.append(self.queue[0].prefetch)
+            callbacks += self.__prefetch()
 
-            if len(self.queue) >= 2:
-                callbacks.append(self.queue[1].prefetch)
+        await _invoke(callbacks)
+
+    async def move(self, playback_id: int, target_position: int) -> None:
+        callbacks = []
+        with self.lock:
+            d = self.__current_position(playback_id)
+            if d is None or d == target_position:
+                return
+
+            e = self.queue[d]
+            self.queue.pop(d)
+            self.queue.insert(target_position, e)
+            if target_position >= 2:
+                callbacks.append(e.cleanup)
+
+            callbacks += self.__prefetch()
+
+        await _invoke(callbacks)
+
+    async def play_now(self, track: AudioTrack) -> None:
+        callbacks = []
+        with self.lock:
+            position = self.__current_position(track.playback_id)
+
+            callbacks.append(self.queue[0].cleanup)
+            self.queue.pop(0)
+
+            if position is not None and position > 0:
+                position -= 1
+                if position != 0:
+                    e = self.queue[position]
+                    self.queue.pop(position)
+                    self.queue.insert(0, e)
+            else:
+                self.queue.insert(0, LazyAudioSource(track))
+
+            callbacks += self.__prefetch()
 
         await _invoke(callbacks)
 
@@ -309,6 +302,32 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
             for a in self.queue:
                 cast(YTDLStreamAudio, a).cleanup()
             self.queue = []
+
+    def current_playback_id(self) -> int | None:
+        with self.lock:
+            if not self.queue:
+                return None
+            return self.queue[0].track.playback_id
+
+    def current_position(self, playback_id: int) -> int | None:
+        with self.lock:
+            return self.__current_position(playback_id)
+
+    def __current_position(self, playback_id: int) -> int | None:
+        for i, e in enumerate(self.queue):
+            if e.track.playback_id == playback_id:
+                return i
+        return None
+
+    def __prefetch(self) -> list[Callable[[], None]]:
+        callbacks = []
+        if len(self.queue) >= 1:
+            callbacks.append(self.queue[0].prefetch)
+        if len(self.queue) >= 2:
+            callbacks.append(self.queue[1].prefetch)
+        if len(self.queue) >= 3:
+            callbacks.append(self.queue[2].cleanup)
+        return callbacks
 
 
 class BufferedAudioSource(discord.AudioSource):
