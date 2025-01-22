@@ -81,7 +81,7 @@ class YTDLBuffer(io.BufferedIOBase):
 class AudioTrack:
     url: str
     title: str
-    playback_id: int
+    track_id: int
     playback_options: PlaybackOptions
 
 
@@ -209,17 +209,17 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 
         await _invoke(callbacks)
 
-    async def skip(self, playback_id: int | None = None) -> None:
+    async def skip(self, track_id: int | None = None) -> None:
         callbacks = []
         with self.lock:
             if not self.queue:
                 return
 
             d = None
-            if playback_id is None:
+            if track_id is None:
                 d = 0
             else:
-                d = self.__current_position(playback_id)
+                d = self.__current_position(track_id)
 
             if d is None:
                 return
@@ -231,10 +231,10 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 
         await _invoke(callbacks)
 
-    async def move(self, playback_id: int, target_position: int) -> None:
+    async def move(self, track_id: int, target_position: int) -> None:
         callbacks = []
         with self.lock:
-            d = self.__current_position(playback_id)
+            d = self.__current_position(track_id)
             if d is None or d == target_position:
                 return
 
@@ -251,7 +251,7 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
     async def play_now(self, track: AudioTrack) -> None:
         callbacks = []
         with self.lock:
-            position = self.__current_position(track.playback_id)
+            position = self.__current_position(track.track_id)
 
             callbacks.append(self.queue[0].cleanup)
             self.queue.pop(0)
@@ -303,19 +303,19 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
                 cast(YTDLStreamAudio, a).cleanup()
             self.queue = []
 
-    def current_playback_id(self) -> int | None:
+    def current_track_id(self) -> int | None:
         with self.lock:
             if not self.queue:
                 return None
-            return self.queue[0].track.playback_id
+            return self.queue[0].track.track_id
 
-    def current_position(self, playback_id: int) -> int | None:
+    def current_position(self, track_id: int) -> int | None:
         with self.lock:
-            return self.__current_position(playback_id)
+            return self.__current_position(track_id)
 
-    def __current_position(self, playback_id: int) -> int | None:
+    def __current_position(self, track_id: int) -> int | None:
         for i, e in enumerate(self.queue):
-            if e.track.playback_id == playback_id:
+            if e.track.track_id == track_id:
                 return i
         return None
 

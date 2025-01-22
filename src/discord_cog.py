@@ -124,20 +124,20 @@ class GuildState:
         )
         print("[ ] play started")
 
-    async def skip(self, playback_id: int | None = None) -> None:
+    async def skip(self, track_id: int | None = None) -> None:
         async with self._queue_lock:
-            await self._skip(playback_id)
+            await self._skip(track_id)
 
-    async def is_skippable(self, playback_id: int) -> bool:
+    async def is_skippable(self, track_id: int) -> bool:
         async with self._queue_lock:
-            return self._queue.current_position(playback_id) is not None
+            return self._queue.current_position(track_id) is not None
 
-    async def _skip(self, playback_id: int | None = None) -> None:
+    async def _skip(self, track_id: int | None = None) -> None:
         if self._source is not None and (
-            playback_id is None or self._queue.current_playback_id() == playback_id
+            track_id is None or self._queue.current_track_id() == track_id
         ):
             self._source.buffered_audio.drain()
-        await self._queue.skip(playback_id)
+        await self._queue.skip(track_id)
 
     async def play_now(
         self,
@@ -150,9 +150,9 @@ class GuildState:
             await self._queue.play_now(track)
             await self._start(voice_client)
 
-    async def current_playback_id(self) -> int | None:
+    async def current_track_id(self) -> int | None:
         async with self._queue_lock:
-            return self._queue.current_playback_id()
+            return self._queue.current_track_id()
 
     def is_playing(self) -> bool:
         return self._is_playing
@@ -188,7 +188,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
-        self.next_playback_id = 0
+        self.next_track_id = 0
 
         @bot.event
         async def on_ready() -> None:
@@ -278,12 +278,12 @@ class DiscordCog(discord.ext.commands.Cog):
     async def __url(
         self, interaction: discord.Interaction, url: str, options: PlaybackOptions
     ) -> None:
-        playback_id = self.next_playback_id
-        self.next_playback_id += 1
+        track_id = self.next_track_id
+        self.next_track_id += 1
         track = AudioTrack(
             url=url,
             title=url,
-            playback_id=playback_id,
+            track_id=track_id,
             playback_options=options,
         )
         await self.__enqueue(await self.__voice_client(interaction), track)
@@ -554,17 +554,17 @@ class DiscordCog(discord.ext.commands.Cog):
         async def on_skip(interaction: discord.Interaction):
             assert interaction.guild
             state = self.state[interaction.guild.id]
-            if not await state.is_skippable(track.playback_id):
+            if not await state.is_skippable(track.track_id):
                 return await interaction.response.send_message(
                     "Track not enqueued.", ephemeral=True, delete_after=5
                 )
-            await state.skip(track.playback_id)
+            await state.skip(track.track_id)
             await interaction.response.defer()
 
         async def on_play_now(interaction: discord.Interaction):
             assert interaction.guild
             state = self.state[interaction.guild.id]
-            if await state.current_playback_id() == track.playback_id:
+            if await state.current_track_id() == track.track_id:
                 return await interaction.response.send_message(
                     "Already playing.", ephemeral=True, delete_after=5
                 )
@@ -636,13 +636,13 @@ class DiscordCog(discord.ext.commands.Cog):
                     == select.selected_value()
                 ][0]
 
-                playback_id = self.next_playback_id
-                self.next_playback_id += 1
+                track_id = self.next_track_id
+                self.next_track_id += 1
 
                 track = AudioTrack(
                     url=item.url,
                     title=item.name,
-                    playback_id=playback_id,
+                    track_id=track_id,
                     playback_options=options,
                 )
 
