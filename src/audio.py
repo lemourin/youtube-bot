@@ -151,6 +151,7 @@ class LazyAudioSource(discord.AudioSource):
         self.track = track
         self.source: discord.AudioSource | None = None
         self.lock = threading.Lock()
+        self.playback_id: int | None = None
 
     def prefetch(self) -> None:
         with self.lock:
@@ -166,6 +167,7 @@ class LazyAudioSource(discord.AudioSource):
             if self.source:
                 self.source.cleanup()
                 self.source = None
+                self.playback_id = None
 
     @override
     def read(self) -> bytes:
@@ -197,7 +199,6 @@ class YTDLQueuedStreamAudio:
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
         self.current_playback_id = 0
-        self.last_chunk_track_id = 0
 
     async def add(self, track: AudioTrack) -> None:
         callbacks = []
@@ -285,14 +286,13 @@ class YTDLQueuedStreamAudio:
             # print("[ ] YTDLQueuedStreamAudio read")
             if not self.queue:
                 print("[ ] queue empty")
-                self.last_chunk_track_id = -1
                 return AudioChunk(data=b"", playback_id=-1)
             source = self.queue[0]
             c = source.read()
-            if source.track.track_id != self.last_chunk_track_id:
-                self.last_chunk_track_id = source.track.track_id
+            if source.playback_id is None:
                 self.current_playback_id += 1
-            playback_id = self.current_playback_id
+                source.playback_id = self.current_playback_id
+            playback_id = source.playback_id
             # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
             if len(c) < self.read_size:
                 if len(self.queue) > 1:
