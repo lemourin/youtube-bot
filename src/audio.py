@@ -183,13 +183,21 @@ async def _invoke(callbacks: list[Callable[[], None]]):
     await asyncio.to_thread(f)
 
 
-class YTDLQueuedStreamAudio(discord.AudioSource):
+@dataclasses.dataclass
+class AudioChunk:
+    data: bytes
+    playback_id: int
+
+
+class YTDLQueuedStreamAudio:
     def __init__(self) -> None:
         super().__init__()
         self.queue: list[LazyAudioSource] = []
         self.lock = threading.Lock()
         self.read_size = 3840
         self.zeros = b"\0" * self.read_size
+        self.current_playback_id = 0
+        self.last_chunk_track_id = 0
 
     async def add(self, track: AudioTrack) -> None:
         callbacks = []
@@ -252,50 +260,52 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
         callbacks = []
         with self.lock:
             position = self.__current_position(track.track_id)
+            if position == 0:
+                return
 
-            callbacks.append(self.queue[0].cleanup)
-            self.queue.pop(0)
+            if self.queue:
+                callbacks.append(self.queue[0].cleanup)
+                self.queue.pop(0)
 
-            if position is not None and position > 0:
-                position -= 1
-                if position != 0:
-                    e = self.queue[position]
-                    self.queue.pop(position)
-                    self.queue.insert(0, e)
-            else:
+            if position is None:
                 self.queue.insert(0, LazyAudioSource(track))
+            elif position > 1:
+                position -= 1
+                e = self.queue[position]
+                self.queue.pop(position)
+                self.queue.insert(0, e)
 
             callbacks += self.__prefetch()
 
         await _invoke(callbacks)
 
-    @override
-    def read(self) -> bytes:
+    def read(self) -> AudioChunk:
         callbacks = []
         with self.lock:
             # print("[ ] YTDLQueuedStreamAudio read")
             if not self.queue:
                 print("[ ] queue empty")
-                return b""
-            c = self.queue[0].read()
+                self.last_chunk_track_id = -1
+                return AudioChunk(data=b"", playback_id=-1)
+            source = self.queue[0]
+            c = source.read()
+            if source.track.track_id != self.last_chunk_track_id:
+                self.last_chunk_track_id = source.track.track_id
+                self.current_playback_id += 1
+            playback_id = self.current_playback_id
             # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
             if len(c) < self.read_size:
                 if len(self.queue) > 1:
                     c = c + self.zeros[len(c) :]
-                callbacks.append(self.queue[0].cleanup)
+                callbacks.append(source.cleanup)
                 print("[ ] advancing queue")
                 self.queue = self.queue[1:]
                 if len(self.queue) >= 2:
                     callbacks.append(self.queue[1].prefetch)
         for i in callbacks:
             i()
-        return c
+        return AudioChunk(c, playback_id)
 
-    @override
-    def is_opus(self) -> bool:
-        return False
-
-    @override
     def cleanup(self) -> None:
         with self.lock:
             print("[ ] YTDLQueuedStreamAudio cleanup")
@@ -331,24 +341,26 @@ class YTDLQueuedStreamAudio(discord.AudioSource):
 
 
 class BufferedAudioSource(discord.AudioSource):
-    def __init__(self, source: discord.AudioSource, executor: Executor) -> None:
+    def __init__(self, source: YTDLQueuedStreamAudio, executor: Executor) -> None:
         self.done = False
         self.max_chunk_count = 256
         self.preload_chunk_count = 128
         self.source = source
         self.executor = executor
-        self.chunks: list[bytes] = []
+        self.chunks: list[AudioChunk] = []
         self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
         self.chunks_to_skip = 0
         self.future = self.executor.submit(self.__fetcher_task)
+        self.current_playback_id = -1
+        self.min_playback_id = -1
         with self.chunk_sem:
             pass
 
     def drain(self) -> None:
         with self.access_sem:
-            self.chunks_to_skip = len(self.chunks)
+            self.min_playback_id = self.current_playback_id + 1
 
     def is_done(self) -> bool:
         with self.access_sem:
@@ -367,17 +379,17 @@ class BufferedAudioSource(discord.AudioSource):
             return b""
 
         c = self.chunks[0]
+        self.current_playback_id = c.playback_id
         self.chunks = self.chunks[1:]
         if len(self.chunks) == self.max_chunk_count - 1:
             self.cv.notify()
 
-        if self.chunks_to_skip > 0:
-            self.chunks_to_skip -= 1
+        if c.playback_id < self.min_playback_id:
             self.access_sem.release()
             return self.read()
 
         self.access_sem.release()
-        return c
+        return c.data
 
     @override
     def cleanup(self) -> None:
@@ -402,20 +414,20 @@ class BufferedAudioSource(discord.AudioSource):
                     chunks_pending -= 1
                     self.chunk_sem.release()
 
-            data = self.source.read()
-            if len(data) == 0:
+            chunk = self.source.read()
+            if len(chunk.data) == 0:
                 self.chunk_sem.release(chunks_pending + 1)
                 self.done = True
                 print("[ ] BufferedAudioSource fetcher stopped, finished")
                 break
             with self.access_sem:
-                self.chunks.append(data)
+                self.chunks.append(chunk)
             chunks_pending += 1
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(
-        self, queue: discord.AudioSource, volume: float, executor: Executor
+        self, queue: YTDLQueuedStreamAudio, volume: float, executor: Executor
     ) -> None:
         self.buffered_audio = BufferedAudioSource(queue, executor)
         super().__init__(self.buffered_audio, volume)
