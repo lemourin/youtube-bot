@@ -369,7 +369,8 @@ class BufferedAudioSource(discord.AudioSource):
     @override
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
-        self.chunk_sem.acquire()
+        if not self.chunk_sem.acquire(timeout=0.010):
+            return b"\0" * 3840
         self.access_sem.acquire()
 
         if not self.chunks:
