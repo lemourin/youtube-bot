@@ -8,6 +8,8 @@ from concurrent.futures import Executor
 import json
 import discord
 
+AUDIO_PACKET_SIZE = 3840
+
 
 @dataclasses.dataclass
 class PlaybackOptions:
@@ -196,8 +198,7 @@ class YTDLQueuedStreamAudio:
         super().__init__()
         self.queue: list[LazyAudioSource] = []
         self.lock = threading.Lock()
-        self.read_size = 3840
-        self.zeros = b"\0" * self.read_size
+        self.zeros = b"\0" * AUDIO_PACKET_SIZE
         self.current_playback_id = 0
 
     async def add(self, track: AudioTrack) -> None:
@@ -294,7 +295,7 @@ class YTDLQueuedStreamAudio:
                 source.playback_id = self.current_playback_id
             playback_id = source.playback_id
             # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
-            if len(c) < self.read_size:
+            if len(c) < AUDIO_PACKET_SIZE:
                 if len(self.queue) > 1:
                     c = c + self.zeros[len(c) :]
                 callbacks.append(source.cleanup)
@@ -370,7 +371,7 @@ class BufferedAudioSource(discord.AudioSource):
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
         if not self.chunk_sem.acquire(timeout=0.010):
-            return b"\0" * 3840
+            return b"\0" * AUDIO_PACKET_SIZE
         self.access_sem.acquire()
 
         if not self.chunks:
