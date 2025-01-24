@@ -2,7 +2,8 @@ import subprocess
 import threading
 import asyncio
 import dataclasses
-from typing import cast, override, Callable
+import inspect
+from typing import cast, override, Callable, Awaitable, Sequence, MutableSequence
 import io
 from concurrent.futures import Executor
 import json
@@ -85,6 +86,7 @@ class AudioTrack:
     title: str
     track_id: int
     playback_options: PlaybackOptions
+    interaction: discord.Interaction
 
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
@@ -179,12 +181,15 @@ class LazyAudioSource(discord.AudioSource):
             return self.source.read()
 
 
-async def _invoke(callbacks: list[Callable[[], None]]):
+async def _invoke(callbacks: Sequence[Callable[[], None] | Awaitable[None]]):
+    async_funcs = [i for i in callbacks if inspect.iscoroutine(i)]
+    sync_funcs = [i for i in callbacks if not inspect.iscoroutine(i)]
+
     def f():
-        for i in callbacks:
+        for i in sync_funcs:
             i()
 
-    await asyncio.to_thread(f)
+    await asyncio.gather(asyncio.to_thread(f), *async_funcs)
 
 
 @dataclasses.dataclass
@@ -194,12 +199,21 @@ class AudioChunk:
 
 
 class YTDLQueuedStreamAudio:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        executor: Executor,
+        on_enqueued: Callable[[AudioTrack], Awaitable[None]],
+        on_dequeued: Callable[[AudioTrack], Awaitable[None]],
+    ) -> None:
         super().__init__()
+        self.main_loop = asyncio.get_event_loop()
+        self.executor = executor
         self.queue: list[LazyAudioSource] = []
         self.lock = threading.Lock()
         self.zeros = b"\0" * AUDIO_PACKET_SIZE
         self.current_playback_id = 0
+        self.on_enqueued = on_enqueued
+        self.on_dequeued = on_dequeued
 
     async def add(self, track: AudioTrack) -> None:
         callbacks = []
@@ -209,18 +223,8 @@ class YTDLQueuedStreamAudio:
             callbacks += self.__prefetch()
         await _invoke(callbacks)
 
-    async def prepend(self, track: AudioTrack) -> None:
-        callbacks = []
-        with self.lock:
-            print(f"[ ] prepending {track.url} to queue")
-            e = LazyAudioSource(track)
-            self.queue.insert(0, e)
-            callbacks += self.__prefetch()
-
-        await _invoke(callbacks)
-
     async def skip(self, track_id: int | None = None) -> None:
-        callbacks = []
+        callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
             if not self.queue:
                 return
@@ -235,54 +239,44 @@ class YTDLQueuedStreamAudio:
                 return
 
             callbacks.append(self.queue[d].cleanup)
+            callbacks.append(self.on_dequeued(self.queue[d].track))
             self.queue.pop(d)
 
             callbacks += self.__prefetch()
 
         await _invoke(callbacks)
 
-    async def move(self, track_id: int, target_position: int) -> None:
-        callbacks = []
-        with self.lock:
-            d = self.__current_position(track_id)
-            if d is None or d == target_position:
-                return
-
-            e = self.queue[d]
-            self.queue.pop(d)
-            self.queue.insert(target_position, e)
-            if target_position >= 2:
-                callbacks.append(e.cleanup)
-
-            callbacks += self.__prefetch()
-
-        await _invoke(callbacks)
-
-    async def play_now(self, track: AudioTrack) -> None:
-        callbacks = []
+    async def play_now(
+        self,
+        track: AudioTrack,
+    ) -> None:
+        callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
             position = self.__current_position(track.track_id)
             if position == 0:
                 return
 
             if self.queue:
+                callbacks.append(self.on_dequeued(self.queue[0].track))
                 callbacks.append(self.queue[0].cleanup)
                 self.queue.pop(0)
 
             if position is None:
-                self.queue.insert(0, LazyAudioSource(track))
+                e = LazyAudioSource(track)
+                self.queue.insert(0, e)
+                callbacks.append(self.on_enqueued(e.track))
             elif position > 1:
                 position -= 1
                 e = self.queue[position]
                 self.queue.pop(position)
                 self.queue.insert(0, e)
+                callbacks.append(self.on_enqueued(e.track))
 
             callbacks += self.__prefetch()
 
         await _invoke(callbacks)
 
     def read(self) -> AudioChunk:
-        callbacks = []
         with self.lock:
             # print("[ ] YTDLQueuedStreamAudio read")
             if not self.queue:
@@ -293,24 +287,29 @@ class YTDLQueuedStreamAudio:
             if source.playback_id is None:
                 self.current_playback_id += 1
                 source.playback_id = self.current_playback_id
+                asyncio.ensure_future(
+                    self.on_enqueued(source.track), loop=self.main_loop
+                )
             playback_id = source.playback_id
             # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
             if len(c) < AUDIO_PACKET_SIZE:
+                print("[ ] advancing queue")
                 if len(self.queue) > 1:
                     c = c + self.zeros[len(c) :]
-                callbacks.append(source.cleanup)
-                print("[ ] advancing queue")
+                asyncio.ensure_future(
+                    self.on_dequeued(source.track), loop=self.main_loop
+                )
+                self.executor.submit(source.cleanup)
                 self.queue = self.queue[1:]
                 if len(self.queue) >= 2:
-                    callbacks.append(self.queue[1].prefetch)
-        for i in callbacks:
-            i()
+                    self.executor.submit(self.queue[1].prefetch)
         return AudioChunk(c, playback_id)
 
     def cleanup(self) -> None:
         with self.lock:
             print("[ ] YTDLQueuedStreamAudio cleanup")
             for a in self.queue:
+                asyncio.ensure_future(self.on_dequeued(a.track))
                 cast(YTDLStreamAudio, a).cleanup()
             self.queue = []
 
@@ -352,7 +351,6 @@ class BufferedAudioSource(discord.AudioSource):
         self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
-        self.chunks_to_skip = 0
         self.future = self.executor.submit(self.__fetcher_task)
         self.current_playback_id = -1
         self.min_playback_id = -1

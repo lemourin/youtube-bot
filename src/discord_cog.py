@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast, override, Callable, Awaitable, Dict, Any, Tuple
+from typing import cast, Dict, Any, Tuple
 import io
 import sys
 from urllib.parse import urlparse
@@ -9,7 +9,9 @@ import discord
 import discord.ext.commands
 import validators
 from linkpreview import link_preview  # type: ignore
-from src.audio import YTDLQueuedStreamAudio, YTDLSource, PlaybackOptions, AudioTrack
+from src.audio import YTDLSource, PlaybackOptions, AudioTrack
+from src.guild_state import GuildState
+from src.discord_ui import ButtonView, SelectView, View
 from src.util import (
     read_at_most,
     yt_video_data_from_url,
@@ -22,153 +24,6 @@ from src.util import (
     SearchEntry,
     MessageContent,
 )
-
-
-AUDIO_BITRATE = 320
-
-
-class View(discord.ui.View):
-    def __init__(self, on_timeout: Callable[[], Awaitable[None]], **kwargs):
-        super().__init__(**kwargs)
-        self._on_timeout = on_timeout
-
-    async def on_timeout(self) -> None:
-        await self._on_timeout()
-
-
-class SelectView(discord.ui.Select):
-    def __init__(
-        self, callback: Callable[[discord.Interaction], Awaitable[None]], **kwargs
-    ) -> None:
-        super().__init__(**kwargs)
-        self._callback = callback
-
-    def selected_value(self) -> str:
-        return self.values[0]
-
-    @override
-    async def callback(self, interaction: discord.Interaction) -> None:
-        return await self._callback(interaction)
-
-
-class ButtonView(discord.ui.Button):
-    def __init__(
-        self, callback: Callable[[discord.Interaction], Awaitable[None]], **kwargs
-    ) -> None:
-        super().__init__(**kwargs)
-        self._callback = callback
-
-    @override
-    async def callback(self, interaction: discord.Interaction) -> None:
-        return await self._callback(interaction)
-
-
-class GuildState:
-    def __init__(self, executor: Executor) -> None:
-        self._executor = executor
-        self._queue = YTDLQueuedStreamAudio()
-        self._source: YTDLSource | None = None
-        self._is_playing = False
-        self._volume = 0.1
-        self._queue_lock = asyncio.Lock()
-
-    async def enqueue(
-        self,
-        voice_client: discord.VoiceClient,
-        track: AudioTrack,
-    ) -> None:
-        async with self._queue_lock:
-            await self._enqueue(voice_client, track)
-
-    async def _enqueue(
-        self,
-        voice_client: discord.VoiceClient,
-        track: AudioTrack,
-    ) -> None:
-        await self._queue.add(track)
-        await self._start(voice_client)
-
-    async def _start(self, voice_client: discord.VoiceClient) -> None:
-        if self._source and not self._source.buffered_audio.is_done():
-            return
-
-        print("[ ] voice client not playing, starting")
-        self._is_playing = True
-        if self._source:
-            source = self._source
-            self._source = None
-            await asyncio.to_thread(source.cleanup)
-        self._source = await asyncio.to_thread(
-            lambda: YTDLSource(
-                self._queue,
-                self._volume,
-                self._executor,
-            )
-        )
-
-        def finalizer(self: GuildState, err: Exception | None):
-            if err:
-                print(f"[!] player error: {err}")
-            else:
-                print("[ ] finished playing")
-                self._is_playing = False
-
-        voice_client.play(
-            self._source,
-            signal_type="music",
-            bitrate=AUDIO_BITRATE,
-            fec=False,
-            # fec=True,
-            # expected_packet_loss=0.05,
-            after=lambda err: finalizer(self, err),
-        )
-        print("[ ] play started")
-
-    async def skip(self, track_id: int | None = None) -> None:
-        async with self._queue_lock:
-            await self._skip(track_id)
-
-    async def is_skippable(self, track_id: int) -> bool:
-        async with self._queue_lock:
-            return self._queue.current_position(track_id) is not None
-
-    async def _skip(self, track_id: int | None = None) -> None:
-        if self._source is not None and (
-            track_id is None or self._queue.current_track_id() == track_id
-        ):
-            self._source.buffered_audio.drain()
-        await self._queue.skip(track_id)
-
-    async def play_now(
-        self,
-        voice_client: discord.VoiceClient,
-        track: AudioTrack,
-    ) -> None:
-        async with self._queue_lock:
-            if self._source is not None:
-                self._source.buffered_audio.drain()
-            await self._queue.play_now(track)
-            await self._start(voice_client)
-
-    async def current_track_id(self) -> int | None:
-        async with self._queue_lock:
-            return self._queue.current_track_id()
-
-    def is_playing(self) -> bool:
-        return self._is_playing
-
-    async def cleanup(self) -> None:
-        async with self._queue_lock:
-            if self._source is not None:
-                self._source.cleanup()
-            self._queue.cleanup()
-
-    def set_volume(self, value: float) -> None:
-        self._volume = value
-
-    async def enqueued_tracks(self) -> list[AudioTrack]:
-        async with self._queue_lock:
-            return [e.track for e in self._queue.queue]
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -278,6 +133,7 @@ class DiscordCog(discord.ext.commands.Cog):
     async def __url(
         self, interaction: discord.Interaction, url: str, options: PlaybackOptions
     ) -> None:
+        assert interaction.guild_id
         track_id = self.next_track_id
         self.next_track_id += 1
         track = AudioTrack(
@@ -285,8 +141,11 @@ class DiscordCog(discord.ext.commands.Cog):
             title=url,
             track_id=track_id,
             playback_options=options,
+            interaction=interaction,
         )
-        await self.__enqueue(await self.__voice_client(interaction), track)
+        state = self.__guild_state(interaction.guild_id)
+        voice_client = await state.voice_client(interaction)
+        await state.enqueue(voice_client, track)
         await interaction.response.defer()
 
         async def message_content_with_yt_dlp() -> MessageContent | None:
@@ -351,7 +210,11 @@ class DiscordCog(discord.ext.commands.Cog):
         return await interaction.followup.send(
             embed=embed,
             files=attachments,
-            view=self.__playback_control_view(interaction, track),
+            view=await state.new_playback_control_view(
+                voice_client,
+                interaction,
+                track,
+            ),
         )
 
     @discord.app_commands.describe(
@@ -546,51 +409,6 @@ class DiscordCog(discord.ext.commands.Cog):
             message_content, options, image=message_content.artwork_url
         )
 
-    def __playback_control_view(
-        self,
-        interaction: discord.Interaction,
-        track: AudioTrack,
-    ) -> discord.ui.View:
-        async def on_skip(interaction: discord.Interaction):
-            assert interaction.guild
-            state = self.state[interaction.guild.id]
-            if not await state.is_skippable(track.track_id):
-                return await interaction.response.send_message(
-                    "Track not enqueued.", ephemeral=True, delete_after=5
-                )
-            await state.skip(track.track_id)
-            await interaction.response.defer()
-
-        async def on_play_now(interaction: discord.Interaction):
-            assert interaction.guild
-            state = self.state[interaction.guild.id]
-            if await state.current_track_id() == track.track_id:
-                return await interaction.response.send_message(
-                    "Already playing.", ephemeral=True, delete_after=5
-                )
-            await state.play_now(await self.__voice_client(interaction), track)
-            await interaction.response.defer()
-
-        async def on_timeout():
-            await interaction.edit_original_response(view=None)
-
-        view = View(on_timeout=on_timeout, timeout=300)
-        view.add_item(
-            ButtonView(
-                style=discord.ButtonStyle.red,
-                label="Skip",
-                callback=on_skip,
-            )
-        )
-        view.add_item(
-            ButtonView(
-                style=discord.ButtonStyle.blurple,
-                label="Play Now",
-                callback=on_play_now,
-            )
-        )
-        return view
-
     async def __search_result_select(
         self,
         interaction: discord.Interaction,
@@ -644,12 +462,14 @@ class DiscordCog(discord.ext.commands.Cog):
                     title=item.name,
                     track_id=track_id,
                     playback_options=options,
+                    interaction=interaction,
                 )
 
                 try:
-                    await self.__enqueue(
-                        await self.__voice_client(selection_interaction), track
-                    )
+                    assert selection_interaction.guild_id
+                    state = self.__guild_state(selection_interaction.guild_id)
+                    voice_client = await state.voice_client(selection_interaction)
+                    await state.enqueue(voice_client, track)
                     embed, attachments = await self.__create_embed(
                         item.on_select_message, options
                     )
@@ -657,7 +477,9 @@ class DiscordCog(discord.ext.commands.Cog):
                         content=None,
                         embed=embed,
                         attachments=attachments,
-                        view=self.__playback_control_view(interaction, track),
+                        view=await state.new_playback_control_view(
+                            voice_client, interaction, track
+                        ),
                     )
                     dismissed = True
                 except discord.DiscordException as e:
@@ -730,7 +552,9 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.__ensure_voice(interaction)
         author = cast(discord.Member, interaction.user)
         assert author.voice is not None
-        await (await self.__voice_client(interaction)).move_to(author.voice.channel)
+        assert interaction.guild_id
+        state = self.__guild_state(interaction.guild_id)
+        await (await state.voice_client(interaction)).move_to(author.voice.channel)
         await interaction.response.send_message("Joined.", ephemeral=True)
 
     async def skip(self, interaction: discord.Interaction) -> None:
@@ -745,10 +569,10 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.__ensure_playing(interaction)
         print(f"[ ] volume {volume}")
         volume = max(min(volume, 200), 0)
-        voice_client = await self.__voice_client(interaction)
 
         assert interaction.guild
         state = self.__guild_state(interaction.guild.id)
+        voice_client = await state.voice_client(interaction)
         state.set_volume(volume / 100)
         cast(YTDLSource, voice_client.source).volume = volume / 100
         await interaction.response.send_message(
@@ -766,7 +590,9 @@ class DiscordCog(discord.ext.commands.Cog):
 
     async def leave(self, interaction: discord.Interaction) -> None:
         print("[ ] leave")
-        voice_client = self.__current_voice_client(interaction)
+        assert interaction.guild_id
+        state = self.__guild_state(interaction.guild_id)
+        voice_client = state.current_voice_client()
         if voice_client is not None:
             await voice_client.disconnect(force=False)
         await interaction.response.send_message("Left.", ephemeral=True)
@@ -800,40 +626,9 @@ class DiscordCog(discord.ext.commands.Cog):
             )
             raise discord.ext.commands.CommandError("audio not playing")
 
-    def __current_voice_client(
-        self, interaction: discord.Interaction
-    ) -> discord.VoiceClient | None:
-        for e in self.bot.voice_clients:
-            voice_client = cast(discord.VoiceClient, e)
-            if voice_client.guild.id == interaction.guild_id:
-                return voice_client
-        return None
-
-    async def __voice_client(
-        self, interaction: discord.Interaction
-    ) -> discord.VoiceClient:
-        voice_client = self.__current_voice_client(interaction)
-        if voice_client:
-            return voice_client
-        assert isinstance(interaction.user, discord.Member)
-        if interaction.user.voice is None or interaction.user.voice.channel is None:
-            await interaction.response.send_message(
-                "no voice channel, dumbass", ephemeral=True
-            )
-            raise discord.ext.commands.CommandError("not connected to a voice channel")
-        return await interaction.user.voice.channel.connect()
-
     def __guild_state(self, guild_id: int) -> GuildState:
         if guild_id in self.state:
             return self.state[guild_id]
-        state = GuildState(self.executor)
+        state = GuildState(guild_id, self.executor, self.bot)
         self.state[guild_id] = state
         return state
-
-    async def __enqueue(
-        self,
-        voice_client: discord.VoiceClient,
-        track: AudioTrack,
-    ) -> None:
-        state = self.__guild_state(voice_client.guild.id)
-        await state.enqueue(voice_client, track)
