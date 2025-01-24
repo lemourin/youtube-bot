@@ -412,9 +412,6 @@ class BufferedAudioSource(discord.AudioSource):
                     print("[ ] BufferedAudioSource fetcher stopped, close event")
                     self.chunk_sem.release(chunks_pending + 1)
                     break
-                if len(self.chunks) >= self.preload_chunk_count:
-                    chunks_pending -= 1
-                    self.chunk_sem.release()
 
             chunk = self.source.read()
             if len(chunk.data) == 0:
@@ -424,7 +421,10 @@ class BufferedAudioSource(discord.AudioSource):
                 break
             with self.access_sem:
                 self.chunks.append(chunk)
-            chunks_pending += 1
+                chunks_pending += 1
+                if len(self.chunks) >= self.preload_chunk_count:
+                    self.chunk_sem.release(chunks_pending)
+                    chunks_pending = 0
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
