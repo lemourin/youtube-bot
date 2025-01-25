@@ -275,6 +275,40 @@ class DiscordCog(discord.ext.commands.Cog):
                 entries.append(yt_item_to_search_item(entry))
         await self.__search_result_select(interaction, entries, options)
 
+    async def _jf_query(self, query: str) -> list[dict]:
+        assert self.jellyfin_client
+        result = await asyncio.to_thread(
+            self.jellyfin_client.client.jellyfin.search_media_items,
+            term=query,
+            parent_id=self.jellyfin_client.library_id,
+        )
+
+        items: list[dict] = []
+        coros = []
+        for e in result["Items"]:
+            if e["Type"] == "Audio":
+                items.append(e)
+            if e["Type"] == "MusicArtist":
+                coros.append(
+                    asyncio.to_thread(
+                        self.jellyfin_client.client.jellyfin.search_media_items,
+                        media="Audio",
+                        parent_id=e["Id"],
+                    )
+                )
+        for d in await asyncio.gather(*coros):
+            for e in d["Items"]:
+                items.append(e)
+
+        ids = set()
+        filtered = []
+        for i in items:
+            if i["Id"] not in ids:
+                ids.add(i["Id"])
+                filtered.append(i)
+        filtered.sort(key=lambda x: x["UserData"]["PlayCount"], reverse=True)
+        return filtered
+
     @discord.app_commands.describe(
         query="Search query.",
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
@@ -302,19 +336,10 @@ class DiscordCog(discord.ext.commands.Cog):
             )
             return
 
-        result = await asyncio.to_thread(
-            self.jellyfin_client.client.jellyfin.search_media_items,
-            media="Audio",
-            term=query,
-            parent_id=self.jellyfin_client.library_id,
-        )
-
         entries: list[SearchEntry] = []
-        for entry in result["Items"]:
+        for entry in await self._jf_query(query):
             if len(entries) >= 10:
                 break
-            if entry["Type"] != "Audio":
-                continue
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             name = f"{artist_name} - {entry["Name"]}"
 
