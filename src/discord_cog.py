@@ -145,8 +145,8 @@ class DiscordCog(discord.ext.commands.Cog):
         )
         state = self.__guild_state(interaction.guild_id)
         voice_client = await state.voice_client(interaction)
-        await state.enqueue(voice_client, track)
         await interaction.response.defer()
+        await state.enqueue(voice_client, track)
 
         async def message_content_with_yt_dlp() -> MessageContent | None:
             details = await asyncio.to_thread(yt_video_data_from_url, url)
@@ -207,9 +207,9 @@ class DiscordCog(discord.ext.commands.Cog):
             message_content,
             options,
         )
-        return await interaction.followup.send(
+        await interaction.edit_original_response(
             embed=embed,
-            files=attachments,
+            attachments=attachments,
             view=state.new_playback_control_view(
                 interaction,
                 track,
