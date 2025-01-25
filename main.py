@@ -24,6 +24,7 @@ JELLYFIN_APP_NAME = os.environ.get("JELLYFIN_APP_NAME")
 JELLYFIN_APP_VERSION = os.environ.get("JELLYFIN_APP_VERSION")
 JELLYFIN_ADDRESS = os.environ.get("JELLYFIN_ADDRESS")
 JELLYFIN_USER_ID = os.environ.get("JELLYFIN_USER_ID")
+JELLYFIN_DEVICE_ID = os.environ.get("JELLYFIN_DEVICE_ID")
 JELLYFIN_LIBRARY_ID = os.environ.get("JELLYFIN_LIBRARY_ID")
 
 
@@ -56,6 +57,7 @@ async def main() -> None:
     if JELLYFIN_ADDRESS and JELLYFIN_LIBRARY_ID:
         client = JellyfinClient()
         client.config.data["app.name"] = JELLYFIN_APP_NAME
+        client.config.data["app.device_id"] = JELLYFIN_DEVICE_ID
         client.config.data["app.version"] = JELLYFIN_APP_VERSION
         client.config.data["auth.ssl"] = True
         client.authenticate(

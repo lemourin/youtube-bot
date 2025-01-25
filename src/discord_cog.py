@@ -346,7 +346,9 @@ class DiscordCog(discord.ext.commands.Cog):
             entries.append(
                 SearchEntry(
                     name=name,
-                    url=self.jellyfin_client.client.jellyfin.download_url(entry["Id"]),
+                    url=self.jellyfin_client.client.jellyfin.audio_url(
+                        entry["Id"], container="flac", audio_codec="flac"
+                    ),
                     on_select_message=MessageContent(
                         title=entry["Name"],
                         artwork_url=jf_best_thumbnail_url(
