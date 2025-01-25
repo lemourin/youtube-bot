@@ -442,8 +442,9 @@ class DiscordCog(discord.ext.commands.Cog):
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
             async with dismissed_lock:
+                await selection_interaction.response.defer()
+
                 if dismissed:
-                    await selection_interaction.response.defer()
                     return
 
                 item = [
@@ -472,7 +473,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     embed, attachments = await self.__create_embed(
                         item.on_select_message, options
                     )
-                    await interaction.edit_original_response(
+                    await selection_interaction.edit_original_response(
                         content=None,
                         embed=embed,
                         attachments=attachments,
@@ -481,8 +482,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     dismissed = True
                 except discord.DiscordException as e:
                     print(f"[ ] interaction error: {e}")
-                    await interaction.edit_original_response(view=view)
-                await selection_interaction.response.defer()
+                    await selection_interaction.edit_original_response(view=view)
 
         select = SelectView(callback=on_selected)
         message = ""
