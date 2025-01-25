@@ -210,8 +210,7 @@ class DiscordCog(discord.ext.commands.Cog):
         return await interaction.followup.send(
             embed=embed,
             files=attachments,
-            view=await state.new_playback_control_view(
-                voice_client,
+            view=state.new_playback_control_view(
                 interaction,
                 track,
             ),
@@ -477,9 +476,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         content=None,
                         embed=embed,
                         attachments=attachments,
-                        view=await state.new_playback_control_view(
-                            voice_client, interaction, track
-                        ),
+                        view=state.new_playback_control_view(interaction, track),
                     )
                     dismissed = True
                 except discord.DiscordException as e:

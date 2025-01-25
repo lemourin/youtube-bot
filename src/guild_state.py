@@ -26,9 +26,15 @@ class GuildState:
 
     async def _on_enqueued(self, track: AudioTrack) -> None:
         print(f"[ ] enqueued {track.title}")
+        await track.interaction.edit_original_response(
+            view=self.new_playback_control_view(track.interaction, track)
+        )
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
         print(f"[ ] dequeued {track.title}")
+        await track.interaction.edit_original_response(
+            view=self.new_playback_control_view(track.interaction, track)
+        )
 
     async def enqueue(
         self,
@@ -71,6 +77,8 @@ class GuildState:
                 print("[ ] finished playing")
                 self._is_playing = False
 
+        if self._is_playing:
+            voice_client.pause()
         voice_client.play(
             self._source,
             signal_type="music",
@@ -151,7 +159,6 @@ class GuildState:
 
     def __create_playback_control_view(
         self,
-        voice_client: discord.VoiceClient,
         interaction: discord.Interaction,
         track: AudioTrack,
         enable_skip: bool = True,
@@ -188,26 +195,28 @@ class GuildState:
                     "Track not enqueued.", ephemeral=True, delete_after=5
                 )
             await self.skip(track.track_id)
-            await interaction.response.defer()
+            await interaction.response.edit_message(view=create_view(enable_skip=False))
 
         async def on_play_now(interaction: discord.Interaction):
             if await self.current_track_id() == track.track_id:
                 return await interaction.response.send_message(
                     "Already playing.", ephemeral=True, delete_after=5
                 )
-            await self.play_now(voice_client, track)
-            await interaction.response.defer()
+            await self.play_now(await self.voice_client(interaction), track)
+            await interaction.response.edit_message(
+                view=create_view(enable_play_now=False)
+            )
 
         return create_view(enable_skip, enable_play_now)
 
-    async def new_playback_control_view(
+    def new_playback_control_view(
         self,
-        voice_client: discord.VoiceClient,
         interaction: discord.Interaction,
         track: AudioTrack,
     ) -> discord.ui.View:
         return self.__create_playback_control_view(
-            voice_client,
             interaction,
             track,
+            enable_skip=self._queue.current_position(track.track_id) is not None,
+            enable_play_now=self._queue.current_track_id() != track.track_id,
         )
