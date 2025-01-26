@@ -281,6 +281,7 @@ class DiscordCog(discord.ext.commands.Cog):
             self.jellyfin_client.client.jellyfin.search_media_items,
             term=query,
             parent_id=self.jellyfin_client.library_id,
+            limit=200,
         )
 
         items: list[dict] = []
@@ -294,6 +295,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         self.jellyfin_client.client.jellyfin.search_media_items,
                         media="Audio",
                         parent_id=e["Id"],
+                        limit=200,
                     )
                 )
         for d in await asyncio.gather(*coros):
