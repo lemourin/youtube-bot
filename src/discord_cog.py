@@ -363,6 +363,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     {
                         "ItemId": entry_id,
                         "MediaSourceId": entry_id,
+                        "PositionTicks": 0,
                     },
                 )
 
