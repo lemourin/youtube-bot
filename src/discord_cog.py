@@ -2,6 +2,7 @@ import asyncio
 from typing import cast, Dict, Any, Tuple
 import io
 import sys
+import functools
 from urllib.parse import urlparse
 from concurrent.futures import Executor
 import aiohttp
@@ -307,6 +308,7 @@ class DiscordCog(discord.ext.commands.Cog):
         for i in items:
             if i["Id"] not in ids:
                 ids.add(i["Id"])
+                print(f"{i["Name"]} - {i["UserData"]["PlayCount"]}")
                 filtered.append(i)
         filtered.sort(key=lambda x: x["UserData"]["PlayCount"], reverse=True)
         return filtered
@@ -338,12 +340,31 @@ class DiscordCog(discord.ext.commands.Cog):
             )
             return
 
+        client = self.jellyfin_client.client.jellyfin
         entries: list[SearchEntry] = []
         for entry in await self._jf_query(query):
             if len(entries) >= 10:
                 break
             artist_name = entry["Artists"][0] if entry["Artists"] else "Unknown Artist"
             name = f"{artist_name} - {entry["Name"]}"
+
+            async def on_enqueue(entry_id: str) -> None:
+                await asyncio.to_thread(
+                    client.session_playing,
+                    {
+                        "ItemId": entry_id,
+                        "MediaSourceId": entry_id,
+                    },
+                )
+
+            async def on_dequeue(entry_id: str) -> None:
+                await asyncio.to_thread(
+                    client.session_stop,
+                    {
+                        "ItemId": entry_id,
+                        "MediaSourceId": entry_id,
+                    },
+                )
 
             entries.append(
                 SearchEntry(
@@ -361,6 +382,8 @@ class DiscordCog(discord.ext.commands.Cog):
                         footer="Jellyfin",
                     ),
                     duration=entry["RunTimeTicks"] // 10_000_000,
+                    on_enqueue=functools.partial(on_enqueue, entry["Id"]),
+                    on_dequeue=functools.partial(on_dequeue, entry["Id"]),
                 )
             )
         await self.__search_result_select(
@@ -492,6 +515,8 @@ class DiscordCog(discord.ext.commands.Cog):
                     track_id=track_id,
                     playback_options=options,
                     interaction=interaction,
+                    on_enqueue=item.on_enqueue,
+                    on_dequeue=item.on_dequeue,
                 )
 
                 try:

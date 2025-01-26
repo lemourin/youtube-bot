@@ -26,6 +26,8 @@ JELLYFIN_ADDRESS = os.environ.get("JELLYFIN_ADDRESS")
 JELLYFIN_USER_ID = os.environ.get("JELLYFIN_USER_ID")
 JELLYFIN_DEVICE_ID = os.environ.get("JELLYFIN_DEVICE_ID")
 JELLYFIN_LIBRARY_ID = os.environ.get("JELLYFIN_LIBRARY_ID")
+JELLYFIN_USERNAME = os.environ.get("JELLYFIN_USERNAME")
+JELLYFIN_PASSWORD = os.environ.get("JELLYFIN_PASSWORD")
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -56,22 +58,15 @@ async def main() -> None:
     jellyfin_client: JellyfinLibraryClient | None = None
     if JELLYFIN_ADDRESS and JELLYFIN_LIBRARY_ID:
         client = JellyfinClient()
-        client.config.data["app.name"] = JELLYFIN_APP_NAME
-        client.config.data["app.device_id"] = JELLYFIN_DEVICE_ID
-        client.config.data["app.version"] = JELLYFIN_APP_VERSION
         client.config.data["auth.ssl"] = True
-        client.authenticate(
-            {
-                "Servers": [
-                    {
-                        "AccessToken": JELLYFIN_API_KEY,
-                        "address": JELLYFIN_ADDRESS,
-                        "UserId": JELLYFIN_USER_ID,
-                    }
-                ]
-            },
-            discover=False,
+        client.config.app(
+            name=JELLYFIN_APP_NAME,
+            version=JELLYFIN_APP_VERSION,
+            device_name=JELLYFIN_APP_NAME,
+            device_id=JELLYFIN_DEVICE_ID,
         )
+        client.auth.connect_to_address(JELLYFIN_ADDRESS)
+        client.auth.login(JELLYFIN_ADDRESS, JELLYFIN_USERNAME, JELLYFIN_PASSWORD)
         jellyfin_client = JellyfinLibraryClient(
             client, JELLYFIN_LIBRARY_ID, JELLYFIN_ADDRESS
         )

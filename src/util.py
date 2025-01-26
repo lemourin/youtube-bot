@@ -4,6 +4,7 @@ import asyncio
 import json
 import html
 import dataclasses
+from typing import Callable, Awaitable
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 import aiohttp
 import discord
@@ -28,6 +29,8 @@ class SearchEntry:
     url: str
     on_select_message: MessageContent
     duration: int | None = None
+    on_enqueue: Callable[[], Awaitable[None]] | None = None
+    on_dequeue: Callable[[], Awaitable[None]] | None = None
 
 
 @dataclasses.dataclass

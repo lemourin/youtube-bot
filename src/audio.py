@@ -87,6 +87,8 @@ class AudioTrack:
     track_id: int
     playback_options: PlaybackOptions
     interaction: discord.Interaction
+    on_enqueue: Callable[[], Awaitable[None]] | None = None
+    on_dequeue: Callable[[], Awaitable[None]] | None = None
 
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
@@ -221,10 +223,13 @@ class YTDLQueuedStreamAudio:
         self.on_dequeued = on_dequeued
 
     async def add(self, track: AudioTrack) -> None:
-        callbacks = []
+        callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
             print(f"[ ] adding {track.url} to queue")
-            self.queue.append(LazyAudioSource(track))
+            source = LazyAudioSource(track)
+            self.queue.append(source)
+            if len(self.queue) == 1:
+                callbacks.append(self.on_enqueued(source.track))
             callbacks += self.__prefetch()
         await _invoke(callbacks)
 

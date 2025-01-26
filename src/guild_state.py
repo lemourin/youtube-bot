@@ -26,12 +26,16 @@ class GuildState:
 
     async def _on_enqueued(self, track: AudioTrack) -> None:
         print(f"[ ] enqueued {track.title}")
+        if track.on_enqueue:
+            await track.on_enqueue()
         await track.interaction.edit_original_response(
             view=self.new_playback_control_view(track.interaction, track)
         )
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
         print(f"[ ] dequeued {track.title}")
+        if track.on_dequeue:
+            await track.on_dequeue()
         await track.interaction.edit_original_response(
             view=self.new_playback_control_view(track.interaction, track)
         )
