@@ -5,10 +5,12 @@ import sys
 import functools
 from urllib.parse import urlparse
 from concurrent.futures import Executor
+import subprocess
 import aiohttp
 import discord
 import discord.ext.commands
 import validators
+import yt_dlp  # type: ignore
 from linkpreview import link_preview  # type: ignore
 from src.audio import YTDLSource, PlaybackOptions, AudioTrack
 from src.guild_state import GuildState
@@ -127,6 +129,11 @@ class DiscordCog(discord.ext.commands.Cog):
                 name="queue",
                 description="Show enqueued tracks.",
                 callback=self.queue,
+            ),
+            discord.app_commands.Command(
+                name="attach",
+                description="Extract a video out of a url and post an embed with it.",
+                callback=self.attach,
             ),
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
@@ -398,6 +405,42 @@ class DiscordCog(discord.ext.commands.Cog):
                 stop_timestamp=stop_timestamp,
             ),
         )
+
+    @discord.app_commands.describe(
+        url="A url to extract a video from.",
+    )
+    async def attach(self, interaction: discord.Interaction, url: str) -> None:
+        await interaction.response.defer()
+
+        def extract_content() -> Tuple[bytes, str]:
+            with yt_dlp.YoutubeDL() as yt:
+                ext = yt.extract_info(url, download=False)["ext"]
+
+            with subprocess.Popen(
+                executable="yt-dlp",
+                args=["-x", url, "-o", "-"],
+                stdout=asyncio.subprocess.PIPE,
+                bufsize=0,
+            ) as proc:
+                assert proc.stdout
+                chunks: list[bytes] = []
+                while True:
+                    chunk_size = 4096
+                    chunk = proc.stdout.read(chunk_size)
+                    if len(chunk) == 0:
+                        break
+                    if len(chunks) * chunk_size >= 8_000_000:
+                        raise discord.ext.commands.CommandError("Attachment too large!")
+                    chunks.append(chunk)
+            return b"".join(chunks), ext
+
+        try:
+            content, ext = await asyncio.to_thread(extract_content)
+            await interaction.followup.send(
+                file=discord.File(io.BytesIO(content), filename=f"file.{ext}")
+            )
+        except discord.ext.commands.CommandError as e:
+            await interaction.followup.send(e.args[0])
 
     async def __authorize_options(
         self, interaction: discord.Interaction, filter_graph: str | None
