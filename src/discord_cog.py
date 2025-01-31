@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast, Dict, Any, Tuple
+from typing import cast, Dict, Any, Tuple, IO
 import io
 import sys
 import functools
@@ -27,6 +27,9 @@ from src.util import (
     SearchEntry,
     MessageContent,
 )
+
+MAX_SIZE = 8_000_000
+PAGE_SIZE = 4096
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -414,25 +417,65 @@ class DiscordCog(discord.ext.commands.Cog):
 
         def extract_content() -> Tuple[bytes, str]:
             with yt_dlp.YoutubeDL() as yt:
-                ext = yt.extract_info(url, download=False)["ext"]
+                info = yt.extract_info(url, download=False)
+                approx_size = info["filesize_approx"]
+                duration_seconds = info["duration"]
+                ext = info["ext"]
+
+            def read(stream: IO[bytes]) -> bytes:
+                chunks: list[bytes] = []
+                size = 0
+                while True:
+                    chunk = stream.read(PAGE_SIZE)
+                    if len(chunk) == 0:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size >= MAX_SIZE:
+                        raise discord.ext.commands.CommandError("Attachment too large!")
+                print(f"[ ] attachment size = {size}")
+                return b"".join(chunks)
 
             with subprocess.Popen(
                 executable="yt-dlp",
                 args=["-x", url, "-o", "-"],
                 stdout=asyncio.subprocess.PIPE,
                 bufsize=0,
-            ) as proc:
-                assert proc.stdout
-                chunks: list[bytes] = []
-                while True:
-                    chunk_size = 4096
-                    chunk = proc.stdout.read(chunk_size)
-                    if len(chunk) == 0:
-                        break
-                    if len(chunks) * chunk_size >= 8_000_000:
-                        raise discord.ext.commands.CommandError("Attachment too large!")
-                    chunks.append(chunk)
-            return b"".join(chunks), ext
+            ) as input_data:
+                if approx_size is not None and approx_size < MAX_SIZE:
+                    assert input_data.stdout
+                    return read(input_data.stdout), ext
+                audio_bitrate = 64000
+                video_bitrate = 7 * MAX_SIZE / duration_seconds - audio_bitrate
+                if video_bitrate <= 0:
+                    raise discord.ext.commands.CommandError("Attachment too large!")
+                with subprocess.Popen(
+                    args=[
+                        "ffmpeg",
+                        "-i",
+                        "-",
+                        "-c:v",
+                        "h264_videotoolbox",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-b:v",
+                        f"{video_bitrate}",
+                        "-c:a",
+                        "aac_at",
+                        "-b:a",
+                        f"{audio_bitrate}",
+                        "-f",
+                        "mp4",
+                        "-movflags",
+                        "frag_keyframe+empty_moov",
+                        "-",
+                    ],
+                    stdin=input_data.stdout,
+                    stdout=asyncio.subprocess.PIPE,
+                    bufsize=0,
+                ) as postproc:
+                    assert postproc.stdout
+                    return read(postproc.stdout), "mp4"
 
         try:
             content, ext = await asyncio.to_thread(extract_content)
@@ -441,6 +484,8 @@ class DiscordCog(discord.ext.commands.Cog):
             )
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
+        except yt_dlp.utils.YoutubeDLError:
+            await interaction.followup.send("Failed to extract a video.")
 
     async def __authorize_options(
         self, interaction: discord.Interaction, filter_graph: str | None
