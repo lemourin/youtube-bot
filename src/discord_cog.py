@@ -419,18 +419,24 @@ class DiscordCog(discord.ext.commands.Cog):
         await interaction.response.defer()
 
         @dataclasses.dataclass
-        class Attachment:
+        class InlineAttachment:
             content: bytes
             ext: str
+
+        @dataclasses.dataclass
+        class Attachment:
+            url: str
             title: str
+            inline_attachment: InlineAttachment | None = None
 
         def extract_content() -> Attachment:
             with yt_dlp.YoutubeDL(params={"format": format_str}) as yt:
                 info = yt.extract_info(url, download=False)
-                title = info["title"]
                 approx_size = info["filesize_approx"]
                 duration_seconds = info["duration"]
                 ext = info["ext"]
+
+            attachment = Attachment(url=info["url"], title=info["title"])
 
             def read(stream: IO[bytes]) -> bytes:
                 chunks: list[bytes] = []
@@ -452,7 +458,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 audio_bitrate = 64000
                 video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
                 if video_bitrate < 1000:
-                    raise discord.ext.commands.CommandError("Attachment too large!")
+                    return attachment
 
             with subprocess.Popen(
                 args=[
@@ -468,9 +474,10 @@ class DiscordCog(discord.ext.commands.Cog):
             ) as input_data:
                 if audio_bitrate is None or video_bitrate is None:
                     assert input_data.stdout
-                    return Attachment(
-                        content=read(input_data.stdout), ext=ext, title=title
+                    attachment.inline_attachment = InlineAttachment(
+                        content=read(input_data.stdout), ext=ext
                     )
+                    return attachment
                 with subprocess.Popen(
                     args=[
                         "ffmpeg",
@@ -496,19 +503,29 @@ class DiscordCog(discord.ext.commands.Cog):
                     stdout=asyncio.subprocess.PIPE,
                     bufsize=0,
                 ) as postproc:
-                    assert postproc.stdout
-                    return Attachment(
-                        content=read(postproc.stdout), ext="mp4", title=title
-                    )
+                    try:
+                        assert postproc.stdout
+                        attachment.inline_attachment = InlineAttachment(
+                            content=read(postproc.stdout),
+                            ext="mp4",
+                        )
+                        return attachment
+                    except discord.ext.commands.CommandError as e:
+                        print(f"[ ] failed to inline attachment: {e}")
+                        return attachment
 
         try:
             attachment = await asyncio.to_thread(extract_content)
-            await interaction.followup.send(
-                content=f"## {attachment.title}",
-                file=discord.File(
-                    io.BytesIO(attachment.content), filename=f"file.{attachment.ext}"
-                ),
-            )
+            if attachment.inline_attachment is not None:
+                await interaction.followup.send(
+                    content=f"## {attachment.title}",
+                    file=discord.File(
+                        io.BytesIO(attachment.inline_attachment.content),
+                        filename=f"file.{attachment.inline_attachment.ext}",
+                    ),
+                )
+            else:
+                await interaction.followup.send(content=attachment.url)
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
         except yt_dlp.utils.YoutubeDLError:
