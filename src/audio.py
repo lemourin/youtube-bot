@@ -46,7 +46,8 @@ class YTDLBuffer(io.BufferedIOBase):
     def create_process(url: str, options: PlaybackOptions) -> subprocess.Popen[bytes]:
         print(f"[ ] YTDLBuffer creating process for {url}")
         args = [
-            "ffprobe",
+            "yt-dlp",
+            "-x",
             # Audio options, breaks generic downloader.
             # "-f",
             # "bestaudio",

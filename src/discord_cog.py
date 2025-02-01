@@ -414,6 +414,8 @@ class DiscordCog(discord.ext.commands.Cog):
         url="A url to extract a video from.",
     )
     async def attach(self, interaction: discord.Interaction, url: str) -> None:
+        format_str = "b[filesize<8M] / w"
+
         await interaction.response.defer()
 
         @dataclasses.dataclass
@@ -423,7 +425,7 @@ class DiscordCog(discord.ext.commands.Cog):
             title: str
 
         def extract_content() -> Attachment:
-            with yt_dlp.YoutubeDL() as yt:
+            with yt_dlp.YoutubeDL(params={"format": format_str}) as yt:
                 info = yt.extract_info(url, download=False)
                 title = info["title"]
                 approx_size = info["filesize_approx"]
@@ -444,20 +446,31 @@ class DiscordCog(discord.ext.commands.Cog):
                 print(f"[ ] attachment size = {size}")
                 return b"".join(chunks)
 
+            audio_bitrate = None
+            video_bitrate = None
+            if not approx_size or approx_size > MAX_SIZE:
+                audio_bitrate = 64000
+                video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
+                if video_bitrate < 1000:
+                    raise discord.ext.commands.CommandError("Attachment too large!")
+
             with subprocess.Popen(
-                args=["yt-dlp", url, "-o", "-"],
+                args=[
+                    "yt-dlp",
+                    url,
+                    "-f",
+                    format_str,
+                    "-o",
+                    "-",
+                ],
                 stdout=asyncio.subprocess.PIPE,
                 bufsize=0,
             ) as input_data:
-                if approx_size is not None and approx_size < MAX_SIZE:
+                if audio_bitrate is None or video_bitrate is None:
                     assert input_data.stdout
                     return Attachment(
                         content=read(input_data.stdout), ext=ext, title=title
                     )
-                audio_bitrate = 64000
-                video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
-                if video_bitrate <= 0:
-                    raise discord.ext.commands.CommandError("Attachment too large!")
                 with subprocess.Popen(
                     args=[
                         "ffmpeg",
