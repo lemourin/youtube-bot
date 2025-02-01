@@ -116,8 +116,7 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
 
 def yt_video_data_from_url(url: str) -> dict | None:
     with subprocess.Popen(
-        executable="yt-dlp",
-        args=["-x", "--cookies", "cookie.txt", "-J", url],
+        args=["yt-dlp", "--cookies", "cookie.txt", "-J", url],
         stdout=asyncio.subprocess.PIPE,
     ) as process:
         assert process.stdout

@@ -46,7 +46,7 @@ class YTDLBuffer(io.BufferedIOBase):
     def create_process(url: str, options: PlaybackOptions) -> subprocess.Popen[bytes]:
         print(f"[ ] YTDLBuffer creating process for {url}")
         args = [
-            "-x",
+            "ffprobe",
             # Audio options, breaks generic downloader.
             # "-f",
             # "bestaudio",
@@ -73,7 +73,6 @@ class YTDLBuffer(io.BufferedIOBase):
             args.append(f"*{range_opt}")
         print("[ ] yt-dlp", *args)
         return subprocess.Popen(
-            executable="yt-dlp",
             args=args,
             stdout=asyncio.subprocess.PIPE,
             bufsize=0,
@@ -125,8 +124,8 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
         with (
             YTDLBuffer.create_process(url, options) as input_process,
             subprocess.Popen(
-                executable="ffprobe",
                 args=[
+                    "ffprobe",
                     "-i",
                     "-",
                     "-v",

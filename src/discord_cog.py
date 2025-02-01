@@ -437,8 +437,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 return b"".join(chunks)
 
             with subprocess.Popen(
-                executable="yt-dlp",
-                args=["-x", url, "-o", "-"],
+                args=["yt-dlp", url, "-o", "-"],
                 stdout=asyncio.subprocess.PIPE,
                 bufsize=0,
             ) as input_data:
