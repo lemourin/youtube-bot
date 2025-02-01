@@ -6,6 +6,7 @@ import functools
 from urllib.parse import urlparse
 from concurrent.futures import Executor
 import subprocess
+import dataclasses
 import aiohttp
 import discord
 import discord.ext.commands
@@ -415,9 +416,16 @@ class DiscordCog(discord.ext.commands.Cog):
     async def attach(self, interaction: discord.Interaction, url: str) -> None:
         await interaction.response.defer()
 
-        def extract_content() -> Tuple[bytes, str]:
+        @dataclasses.dataclass
+        class Attachment:
+            content: bytes
+            ext: str
+            title: str
+
+        def extract_content() -> Attachment:
             with yt_dlp.YoutubeDL() as yt:
                 info = yt.extract_info(url, download=False)
+                title = info["title"]
                 approx_size = info["filesize_approx"]
                 duration_seconds = info["duration"]
                 ext = info["ext"]
@@ -443,9 +451,11 @@ class DiscordCog(discord.ext.commands.Cog):
             ) as input_data:
                 if approx_size is not None and approx_size < MAX_SIZE:
                     assert input_data.stdout
-                    return read(input_data.stdout), ext
+                    return Attachment(
+                        content=read(input_data.stdout), ext=ext, title=title
+                    )
                 audio_bitrate = 64000
-                video_bitrate = 7 * MAX_SIZE / duration_seconds - audio_bitrate
+                video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
                 if video_bitrate <= 0:
                     raise discord.ext.commands.CommandError("Attachment too large!")
                 with subprocess.Popen(
@@ -474,12 +484,17 @@ class DiscordCog(discord.ext.commands.Cog):
                     bufsize=0,
                 ) as postproc:
                     assert postproc.stdout
-                    return read(postproc.stdout), "mp4"
+                    return Attachment(
+                        content=read(postproc.stdout), ext="mp4", title=title
+                    )
 
         try:
-            content, ext = await asyncio.to_thread(extract_content)
+            attachment = await asyncio.to_thread(extract_content)
             await interaction.followup.send(
-                file=discord.File(io.BytesIO(content), filename=f"file.{ext}")
+                content=f"## {attachment.title}",
+                file=discord.File(
+                    io.BytesIO(attachment.content), filename=f"file.{attachment.ext}"
+                ),
             )
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
