@@ -447,7 +447,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         break
                     chunks.append(chunk)
                     size += len(chunk)
-                    if size >= MAX_SIZE:
+                    if size > MAX_SIZE:
                         raise discord.ext.commands.CommandError("Attachment too large!")
                 print(f"[ ] attachment size = {size}")
                 return b"".join(chunks)
