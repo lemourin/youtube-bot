@@ -433,7 +433,7 @@ class DiscordCog(discord.ext.commands.Cog):
             with yt_dlp.YoutubeDL(params={"format": format_str}) as yt:
                 info = yt.extract_info(url, download=False)
                 approx_size = info.get("filesize_approx")
-                duration_seconds = info["duration"]
+                duration_seconds = info.get("duration")
                 ext = info["ext"]
 
             attachment = Attachment(url=info["url"], title=info["title"])
@@ -455,6 +455,8 @@ class DiscordCog(discord.ext.commands.Cog):
             audio_bitrate = None
             video_bitrate = None
             if not approx_size or approx_size > MAX_SIZE:
+                if not duration_seconds:
+                    return attachment
                 audio_bitrate = 64000
                 video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
                 if video_bitrate < 1000:
