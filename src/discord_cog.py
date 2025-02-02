@@ -432,7 +432,7 @@ class DiscordCog(discord.ext.commands.Cog):
         def extract_content() -> Attachment:
             with yt_dlp.YoutubeDL(params={"format": format_str}) as yt:
                 info = yt.extract_info(url, download=False)
-                approx_size = info["filesize_approx"]
+                approx_size = info.get("filesize_approx")
                 duration_seconds = info["duration"]
                 ext = info["ext"]
 
