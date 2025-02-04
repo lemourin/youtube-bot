@@ -305,11 +305,11 @@ class YTDLQueuedStreamAudio:
                 print("[ ] advancing queue")
                 if len(self.queue) > 1:
                     c = c + self.zeros[len(c) :]
+                self.executor.submit(source.cleanup)
+                self.queue = self.queue[1:]
                 asyncio.ensure_future(
                     self.on_dequeued(source.track), loop=self.main_loop
                 )
-                self.executor.submit(source.cleanup)
-                self.queue = self.queue[1:]
                 if len(self.queue) >= 1:
                     asyncio.ensure_future(
                         self.on_enqueued(self.queue[0].track), loop=self.main_loop
