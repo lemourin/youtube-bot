@@ -154,6 +154,7 @@ class DiscordCog(discord.ext.commands.Cog):
             track_id=track_id,
             playback_options=options,
             interaction=interaction,
+            can_edit_message=False,
         )
         state = self.__guild_state(interaction.guild_id)
         voice_client = await state.voice_client(interaction)
@@ -219,14 +220,15 @@ class DiscordCog(discord.ext.commands.Cog):
             message_content,
             options,
         )
-        await interaction.edit_original_response(
+        await interaction.followup.send(
             embed=embed,
-            attachments=attachments,
+            files=attachments,
             view=state.new_playback_control_view(
                 interaction,
                 track,
             ),
         )
+        track.can_edit_message = True
 
     @discord.app_commands.describe(
         query="Either a url or a search query.",

@@ -31,9 +31,10 @@ class GuildState:
             print(f"[ ] enqueued {track.title}")
             if track.on_enqueue:
                 await track.on_enqueue()
-            await track.interaction.edit_original_response(
-                view=self.new_playback_control_view(track.interaction, track)
-            )
+            if track.can_edit_message:
+                await track.interaction.edit_original_response(
+                    view=self.new_playback_control_view(track.interaction, track)
+                )
             track.on_enqueue_time = int(time.time() * 1000)
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
@@ -47,9 +48,10 @@ class GuildState:
             print(f"[ ] dequeued {track.title}")
             if track.on_dequeue:
                 await track.on_dequeue()
-            await track.interaction.edit_original_response(
-                view=self.new_playback_control_view(track.interaction, track)
-            )
+            if track.can_edit_message:
+                await track.interaction.edit_original_response(
+                    view=self.new_playback_control_view(track.interaction, track)
+                )
 
     async def enqueue(
         self,
