@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import Executor
 from typing import cast
+import time
 import discord
 import discord.ext.commands
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack
@@ -23,22 +24,32 @@ class GuildState:
         self._is_playing = False
         self._volume = 0.1
         self._queue_lock = asyncio.Lock()
+        self._cb_lock = asyncio.Lock()
 
     async def _on_enqueued(self, track: AudioTrack) -> None:
-        print(f"[ ] enqueued {track.title}")
-        if track.on_enqueue:
-            await track.on_enqueue()
-        await track.interaction.edit_original_response(
-            view=self.new_playback_control_view(track.interaction, track)
-        )
+        async with track.lock:
+            print(f"[ ] enqueued {track.title}")
+            if track.on_enqueue:
+                await track.on_enqueue()
+            await track.interaction.edit_original_response(
+                view=self.new_playback_control_view(track.interaction, track)
+            )
+            track.on_enqueue_time = int(time.time() * 1000)
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
-        print(f"[ ] dequeued {track.title}")
-        if track.on_dequeue:
-            await track.on_dequeue()
-        await track.interaction.edit_original_response(
-            view=self.new_playback_control_view(track.interaction, track)
-        )
+        min_enqueue_time = 3000
+        async with track.lock:
+            if track.on_enqueue_time:
+                current_time = int(time.time() * 1000)
+                duration = current_time - track.on_enqueue_time
+                if duration < min_enqueue_time:
+                    await asyncio.sleep((min_enqueue_time - duration) // 1000)
+            print(f"[ ] dequeued {track.title}")
+            if track.on_dequeue:
+                await track.on_dequeue()
+            await track.interaction.edit_original_response(
+                view=self.new_playback_control_view(track.interaction, track)
+            )
 
     async def enqueue(
         self,

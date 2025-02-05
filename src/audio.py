@@ -89,6 +89,8 @@ class AudioTrack:
     interaction: discord.Interaction
     on_enqueue: Callable[[], Awaitable[None]] | None = None
     on_dequeue: Callable[[], Awaitable[None]] | None = None
+    lock = asyncio.Lock()
+    on_enqueue_time: int | None = None
 
 
 class YTDLStreamAudio(discord.FFmpegPCMAudio):
