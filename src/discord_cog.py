@@ -276,7 +276,13 @@ class DiscordCog(discord.ext.commands.Cog):
             self.youtube_client.videos()
             .list(
                 part="snippet, contentDetails",
-                id=",".join([e["id"]["videoId"] for e in response["items"]]),
+                id=",".join(
+                    [
+                        e["id"]["videoId"]
+                        for e in response["items"]
+                        if "videoId" in e["id"]
+                    ]
+                ),
             )
             .execute
         )
