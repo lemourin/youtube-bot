@@ -6,7 +6,6 @@ import inspect
 from typing import override, Callable, Awaitable, Sequence, MutableSequence
 import io
 from concurrent.futures import Executor
-import json
 import discord
 
 AUDIO_PACKET_SIZE = 3840
@@ -98,55 +97,22 @@ class YTDLStreamAudio(discord.FFmpegPCMAudio):
     def __init__(self, url: str, options: PlaybackOptions) -> None:
         self.buffer = YTDLBuffer(url, options)
 
-        ffmpeg_options = ""
-
-        def append(opt: str):
-            nonlocal ffmpeg_options
-            if not ffmpeg_options:
-                ffmpeg_options = "-af "
-            else:
-                ffmpeg_options += ","
-            ffmpeg_options += opt
-
-        if options.nightcore_factor:
-            probe = self.__probe(url, options)
-            sample_rate = 44100
-            for stream in probe["streams"]:
-                if stream["codec_type"] == "audio":
-                    sample_rate = int(stream["sample_rate"])
-                    break
-            append(f"asetrate={sample_rate * options.nightcore_factor}")
-        if options.bassboost_factor:
-            append(f"bass=g={options.bassboost_factor}")
-        if options.filter_graph:
-            append(options.filter_graph)
-        super().__init__(
-            self.buffer, pipe=True, options=f"-vn -loglevel error {ffmpeg_options}"
+        nightcore_factor = (
+            options.nightcore_factor if options.nightcore_factor is not None else 1.0
         )
+        filter_graph = f"rubberband@1=tempo={nightcore_factor}:pitch={nightcore_factor}"
 
-    def __probe(self, url: str, options: PlaybackOptions) -> dict:
-        with (
-            YTDLBuffer.create_process(url, options) as input_process,
-            subprocess.Popen(
-                args=[
-                    "ffprobe",
-                    "-i",
-                    "-",
-                    "-v",
-                    "quiet",
-                    "-print_format",
-                    "json",
-                    "-show_streams",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                ],
-                stdin=input_process.stdout,
-                stdout=asyncio.subprocess.PIPE,
-            ) as process,
-        ):
-            assert process.stdout
-            return json.loads(process.stdout.read())
+        bassboost_factor = options.bassboost_factor if options.bassboost_factor else 0.0
+        filter_graph += f",bass@1=g={bassboost_factor}"
+
+        if options.filter_graph is not None:
+            filter_graph += f",{options.filter_graph}"
+
+        super().__init__(
+            self.buffer,
+            pipe=True,
+            options=f"-vn -loglevel error -af {filter_graph}",
+        )
 
     @override
     def cleanup(self) -> None:
