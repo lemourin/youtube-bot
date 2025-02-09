@@ -4,7 +4,7 @@ from typing import cast
 import time
 import discord
 import discord.ext.commands
-from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack
+from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack, PlaybackOptions
 from src.discord_ui import View, ButtonView
 
 AUDIO_BITRATE = 320
@@ -12,13 +12,17 @@ AUDIO_BITRATE = 320
 
 class GuildState:
     def __init__(
-        self, guild_id: int, executor: Executor, bot: discord.ext.commands.Bot
+        self,
+        guild_id: int,
+        executor: Executor,
+        ffmpeg_zmq_socket: str | None,
+        bot: discord.ext.commands.Bot,
     ) -> None:
         self._guild_id = guild_id
         self._executor = executor
         self._bot = bot
         self._queue = YTDLQueuedStreamAudio(
-            executor, self._on_enqueued, self._on_dequeued
+            executor, ffmpeg_zmq_socket, self._on_enqueued, self._on_dequeued
         )
         self._source: YTDLSource | None = None
         self._is_playing = False
@@ -148,6 +152,12 @@ class GuildState:
 
     def set_volume(self, value: float) -> None:
         self._volume = value
+
+    async def set_options(self, options: PlaybackOptions) -> None:
+        async with self._queue_lock:
+            await asyncio.get_event_loop().run_in_executor(
+                self._executor, self._queue.set_options, options
+            )
 
     async def enqueued_tracks(self) -> list[AudioTrack]:
         async with self._queue_lock:

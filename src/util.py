@@ -112,6 +112,8 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
         embed.add_field(name="start_timestamp", value=options.start_timestamp)
     if options.stop_timestamp:
         embed.add_field(name="stop_timestamp", value=options.stop_timestamp)
+    if options.volume:
+        embed.add_field(name="volume", value=int(options.volume * 100))
 
 
 def yt_video_data_from_url(url: str) -> dict | None:

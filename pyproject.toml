@@ -17,6 +17,7 @@ dependencies = [
     "google-api-python-client",
     "pynacl",
     "linkpreview",
+    "pyzmq",
 ]
 
 [tool.pylint."MESSAGES CONTROL"]

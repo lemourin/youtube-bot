@@ -38,6 +38,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self,
         bot: discord.ext.commands.Bot,
         executor: Executor,
+        ffmpeg_zmq_socket: str | None,
         http: aiohttp.ClientSession,
         discord_admin_id: int,
         jellyfin_client: JellyfinLibraryClient | None = None,
@@ -45,6 +46,7 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         self.bot = bot
         self.executor = executor
+        self.ffmpeg_zmq_socket = ffmpeg_zmq_socket
         self.http = http
         self.discord_admin_id = discord_admin_id
         self.state: Dict[int, GuildState] = {}
@@ -138,6 +140,11 @@ class DiscordCog(discord.ext.commands.Cog):
                 name="attach",
                 description="Extract a video out of a url and post an embed with it.",
                 callback=self.attach,
+            ),
+            discord.app_commands.Command(
+                name="set",
+                description="Alter properties of the currently playing audio.",
+                callback=self.set,
             ),
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
@@ -235,8 +242,9 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
         filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
-        start_timestamp=PlaybackOptions.START_TIMESTAMP,
-        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP,
+        start_timestamp=PlaybackOptions.START_TIMESTAMP_DOC,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP_DOC,
+        volume=PlaybackOptions.VOLUME_DOC,
     )
     async def yt(
         self,
@@ -247,6 +255,7 @@ class DiscordCog(discord.ext.commands.Cog):
         filter_graph: str | None,
         start_timestamp: str | None,
         stop_timestamp: str | None,
+        volume: int | None,
     ) -> None:
         print("[ ] yt app command")
         await self.__authorize_options(interaction, filter_graph)
@@ -256,6 +265,7 @@ class DiscordCog(discord.ext.commands.Cog):
             filter_graph=filter_graph,
             start_timestamp=start_timestamp,
             stop_timestamp=stop_timestamp,
+            volume=min(max(volume, 0), 200) / 100 if volume else None,
         )
         if validators.url(query):
             return await self.__url(interaction, url=query, options=options)
@@ -337,8 +347,9 @@ class DiscordCog(discord.ext.commands.Cog):
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
         filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
-        start_timestamp=PlaybackOptions.START_TIMESTAMP,
-        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP,
+        start_timestamp=PlaybackOptions.START_TIMESTAMP_DOC,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP_DOC,
+        volume=PlaybackOptions.VOLUME_DOC,
     )
     async def jf(
         self,
@@ -349,6 +360,7 @@ class DiscordCog(discord.ext.commands.Cog):
         filter_graph: str | None,
         start_timestamp: str | None,
         stop_timestamp: str | None,
+        volume: int | None,
     ) -> None:
         print(f"[ ] jf {query}")
         await self.__authorize_options(interaction, filter_graph)
@@ -415,6 +427,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 filter_graph=filter_graph,
                 start_timestamp=start_timestamp,
                 stop_timestamp=stop_timestamp,
+                volume=min(max(volume, 0), 200) / 100 if volume else None,
             ),
         )
 
@@ -758,6 +771,32 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.state[interaction.guild.id].skip()
         await interaction.response.send_message("Skipped.", ephemeral=True)
 
+    @discord.app_commands.describe(
+        nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
+        bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
+    )
+    async def set(
+        self,
+        interaction: discord.Interaction,
+        nightcore_factor: float | None,
+        bassboost_factor: float | None,
+        volume: int | None,
+    ):
+        print("[ ] set")
+        if not self.ffmpeg_zmq_socket:
+            await interaction.response.send_message("Unsupported.", ephemeral=True)
+            return
+        await self.__ensure_playing(interaction)
+        assert interaction.guild
+        await self.state[interaction.guild.id].set_options(
+            PlaybackOptions(
+                nightcore_factor=nightcore_factor,
+                bassboost_factor=bassboost_factor,
+                volume=min(max(volume, 0), 200) / 100 if volume else None,
+            )
+        )
+        await interaction.response.send_message("Applied.", ephemeral=True)
+
     @discord.app_commands.describe(volume="Number from 0 to 200.")
     async def volume(self, interaction: discord.Interaction, volume: int) -> None:
         await self.__ensure_playing(interaction)
@@ -823,6 +862,6 @@ class DiscordCog(discord.ext.commands.Cog):
     def __guild_state(self, guild_id: int) -> GuildState:
         if guild_id in self.state:
             return self.state[guild_id]
-        state = GuildState(guild_id, self.executor, self.bot)
+        state = GuildState(guild_id, self.executor, self.ffmpeg_zmq_socket, self.bot)
         self.state[guild_id] = state
         return state
