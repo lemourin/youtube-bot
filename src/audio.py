@@ -116,10 +116,14 @@ class YTDLStreamAudio(discord.FFmpegAudio):
             f"rubberband@1=tempo={nightcore_factor}:pitch={nightcore_factor}"
         )
 
-        bassboost_factor = options.bassboost_factor if options.bassboost_factor else 0.0
+        bassboost_factor = (
+            options.bassboost_factor if options.bassboost_factor is not None else 0.0
+        )
         filter_graph += f",bass@1=g={bassboost_factor}"
 
-        filter_graph += ",volume@1"
+        filter_graph += (
+            f",volume@1=volume={options.volume if options.volume is not None else 1.0}"
+        )
 
         if options.filter_graph is not None:
             filter_graph += f",{options.filter_graph}"
