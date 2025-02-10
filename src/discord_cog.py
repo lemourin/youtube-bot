@@ -562,7 +562,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 "Not allowed to use the filter_graph option.", ephemeral=True
             )
             raise discord.ext.commands.CommandError(
-                "not authorized to use filter_graph option"
+                "Not authorized to use filter_graph option."
             )
 
     def __create_embed_ui(
@@ -787,15 +787,19 @@ class DiscordCog(discord.ext.commands.Cog):
             await interaction.response.send_message("Unsupported.", ephemeral=True)
             return
         await self.__ensure_playing(interaction)
-        assert interaction.guild
-        await self.state[interaction.guild.id].set_options(
-            PlaybackOptions(
-                nightcore_factor=nightcore_factor,
-                bassboost_factor=bassboost_factor,
-                volume=min(max(volume, 0), 200) / 100 if volume else None,
-            )
+        effective_volume = min(max(volume, 0), 200) / 100 if volume else None
+        options = PlaybackOptions(
+            nightcore_factor=nightcore_factor,
+            bassboost_factor=bassboost_factor,
+            volume=effective_volume,
         )
-        await interaction.response.send_message("Applied.", ephemeral=True)
+        assert interaction.guild
+        await self.state[interaction.guild.id].set_options(options)
+        embed = discord.Embed()
+        add_to_embed(embed=embed, options=options)
+        await interaction.response.send_message(
+            "Applied playback settings.", embed=embed
+        )
 
     @discord.app_commands.describe(volume="Number from 0 to 200.")
     async def volume(self, interaction: discord.Interaction, volume: int) -> None:
@@ -808,9 +812,7 @@ class DiscordCog(discord.ext.commands.Cog):
         voice_client = await state.voice_client(interaction)
         state.set_volume(volume / 100)
         cast(YTDLSource, voice_client.source).volume = volume / 100
-        await interaction.response.send_message(
-            f"volume set to {volume}%", ephemeral=True
-        )
+        await interaction.response.send_message(f"Volume set to {volume}%.")
 
     async def stop(self, interaction: discord.Interaction) -> None:
         print("[ ] stop")
@@ -837,15 +839,15 @@ class DiscordCog(discord.ext.commands.Cog):
 
     async def ping(self, interaction: discord.Interaction) -> None:
         print("[ ] ping")
-        await interaction.response.send_message("pong", ephemeral=True)
+        await interaction.response.send_message("Pong.", ephemeral=True)
 
     async def __ensure_voice(self, interaction: discord.Interaction) -> None:
         member = cast(discord.Member, interaction.user)
         if member.voice is None:
             await interaction.response.send_message(
-                "no voice channel, dumbass", ephemeral=True
+                "No voice channel, dumbass.", ephemeral=True
             )
-            raise discord.ext.commands.CommandError("not connected to a voice channel")
+            raise discord.ext.commands.CommandError("Not connected to a voice channel.")
 
     async def __ensure_playing(self, interaction: discord.Interaction) -> None:
         await self.__ensure_voice(interaction)
@@ -855,9 +857,9 @@ class DiscordCog(discord.ext.commands.Cog):
             or not self.state[interaction.guild.id].is_playing()
         ):
             await interaction.response.send_message(
-                "not playing, dumbass", ephemeral=True
+                "Not playing, dumbass.", ephemeral=True
             )
-            raise discord.ext.commands.CommandError("audio not playing")
+            raise discord.ext.commands.CommandError("Audio not playing.")
 
     def __guild_state(self, guild_id: int) -> GuildState:
         if guild_id in self.state:
