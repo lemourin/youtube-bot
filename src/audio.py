@@ -2,6 +2,7 @@ import subprocess
 import threading
 import asyncio
 import dataclasses
+import tempfile
 import inspect
 from typing import override, Callable, Awaitable, Sequence, MutableSequence
 import io
@@ -98,16 +99,11 @@ class AudioTrack:
 
 
 class YTDLStreamAudio(discord.FFmpegAudio):
-    def __init__(
-        self, url: str, options: PlaybackOptions, ffmpeg_zmq_socket: str | None
-    ) -> None:
+    def __init__(self, url: str, options: PlaybackOptions) -> None:
         self._buffer = YTDLBuffer(url, options)
-        self.ffmpeg_zmq_socket = ffmpeg_zmq_socket
+        self._temporary_file = tempfile.NamedTemporaryFile()
 
-        if ffmpeg_zmq_socket:
-            filter_graph = f"azmq=b=ipc\\\\://{self.ffmpeg_zmq_socket},"
-        else:
-            filter_graph = ""
+        filter_graph = f"azmq=b=ipc\\\\://{self._temporary_file.name},"
 
         nightcore_factor = (
             options.nightcore_factor if options.nightcore_factor is not None else 1.0
@@ -164,33 +160,40 @@ class YTDLStreamAudio(discord.FFmpegAudio):
         try:
             print("[ ] YTDLStreamAudio cleanup")
             self._buffer.cleanup()
+            self._temporary_file.close()
             super().cleanup()
         except ValueError as e:
             print(f"[ ] YTDLStreamAudio cleanup {e}")
         except AttributeError as e:
             print(f"[ ] YTDLStreamAudio cleanup {e}")
 
-    def __send_command(self, command: str):
-        assert self.ffmpeg_zmq_socket
-        with zmq.Context() as context:
-            socket = context.socket(zmq.REQ)
-            with socket.connect(f"ipc://{self.ffmpeg_zmq_socket}"):
-                socket.send_string(command)
+    @staticmethod
+    def __send_string(socket: zmq.SyncSocket, command: str) -> None:
+        socket.send_string(command)
+        response = socket.recv_string()
+        if response != "0 Undefined error: 0":
+            raise RuntimeError(f"Failed to send zmq command. {response}")
 
     def set_options(self, options: PlaybackOptions) -> None:
-        if options.nightcore_factor:
-            self.__send_command(f"rubberband@1 tempo {options.nightcore_factor}\n")
-            self.__send_command(f"rubberband@1 pitch {options.nightcore_factor}\n")
-        if options.bassboost_factor:
-            self.__send_command(f"bass@1 g {options.bassboost_factor}\n")
-        if options.volume:
-            self.__send_command(f"volume@1 volume {options.volume}\n")
+        with zmq.Context() as context:
+            socket = context.socket(zmq.REQ)
+            with socket.connect(f"ipc://{self._temporary_file.name}"):
+                if options.nightcore_factor:
+                    self.__send_string(
+                        socket, f"rubberband@1 tempo {options.nightcore_factor}"
+                    )
+                    self.__send_string(
+                        socket, f"rubberband@1 pitch {options.nightcore_factor}"
+                    )
+                if options.bassboost_factor:
+                    self.__send_string(socket, f"bass@1 g {options.bassboost_factor}")
+                if options.volume:
+                    self.__send_string(socket, f"volume@1 volume {options.volume}")
 
 
 class LazyAudioSource(discord.AudioSource):
-    def __init__(self, track: AudioTrack, ffmpeg_zmq_socket: str | None) -> None:
+    def __init__(self, track: AudioTrack) -> None:
         self.track = track
-        self.ffmpeg_zmq_socket = ffmpeg_zmq_socket
         self.source: YTDLStreamAudio | None = None
         self.lock = threading.Lock()
         self.playback_id: int | None = None
@@ -201,9 +204,7 @@ class LazyAudioSource(discord.AudioSource):
 
     def _prefetch(self) -> None:
         if self.source is None:
-            self.source = YTDLStreamAudio(
-                self.track.url, self.track.playback_options, self.ffmpeg_zmq_socket
-            )
+            self.source = YTDLStreamAudio(self.track.url, self.track.playback_options)
 
     @override
     def cleanup(self) -> None:
@@ -242,14 +243,12 @@ class YTDLQueuedStreamAudio:
     def __init__(
         self,
         executor: Executor,
-        ffmpeg_zmq_socket: str | None,
         on_enqueued: Callable[[AudioTrack], Awaitable[None]],
         on_dequeued: Callable[[AudioTrack], Awaitable[None]],
     ) -> None:
         super().__init__()
         self.main_loop = asyncio.get_event_loop()
         self.executor = executor
-        self.ffmpeg_zmq_socket = ffmpeg_zmq_socket
         self.queue: list[LazyAudioSource] = []
         self.lock = threading.Lock()
         self.zeros = b"\0" * AUDIO_PACKET_SIZE
@@ -261,7 +260,7 @@ class YTDLQueuedStreamAudio:
         callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
             print(f"[ ] adding {track.url} to queue")
-            source = LazyAudioSource(track, self.ffmpeg_zmq_socket)
+            source = LazyAudioSource(track)
             self.queue.append(source)
             if len(self.queue) == 1:
                 callbacks.append(self.on_enqueued(source.track))
@@ -309,7 +308,7 @@ class YTDLQueuedStreamAudio:
                 self.queue.pop(0)
 
             if position is None:
-                e = LazyAudioSource(track, self.ffmpeg_zmq_socket)
+                e = LazyAudioSource(track)
                 self.queue.insert(0, e)
                 callbacks.append(self.on_enqueued(e.track))
             elif position > 1:
@@ -371,7 +370,8 @@ class YTDLQueuedStreamAudio:
         with self.lock:
             if not self.queue or not self.queue[0].source:
                 return
-            self.queue[0].source.set_options(options)
+            source = self.queue[0].source
+            self.executor.submit(source.set_options, options)
 
     def current_position(self, track_id: int) -> int | None:
         with self.lock:
@@ -397,8 +397,8 @@ class YTDLQueuedStreamAudio:
 class BufferedAudioSource(discord.AudioSource):
     def __init__(self, source: YTDLQueuedStreamAudio, executor: Executor) -> None:
         self.done = False
-        self.max_chunk_count = 256
-        self.preload_chunk_count = 128
+        self.max_chunk_count = 32
+        self.preload_chunk_count = 16
         self.source = source
         self.executor = executor
         self.chunks: list[AudioChunk] = []

@@ -15,14 +15,13 @@ class GuildState:
         self,
         guild_id: int,
         executor: Executor,
-        ffmpeg_zmq_socket: str | None,
         bot: discord.ext.commands.Bot,
     ) -> None:
         self._guild_id = guild_id
         self._executor = executor
         self._bot = bot
         self._queue = YTDLQueuedStreamAudio(
-            executor, ffmpeg_zmq_socket, self._on_enqueued, self._on_dequeued
+            executor, self._on_enqueued, self._on_dequeued
         )
         self._source: YTDLSource | None = None
         self._is_playing = False

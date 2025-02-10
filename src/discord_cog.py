@@ -38,7 +38,6 @@ class DiscordCog(discord.ext.commands.Cog):
         self,
         bot: discord.ext.commands.Bot,
         executor: Executor,
-        ffmpeg_zmq_socket: str | None,
         http: aiohttp.ClientSession,
         discord_admin_id: int,
         jellyfin_client: JellyfinLibraryClient | None = None,
@@ -46,7 +45,6 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         self.bot = bot
         self.executor = executor
-        self.ffmpeg_zmq_socket = ffmpeg_zmq_socket
         self.http = http
         self.discord_admin_id = discord_admin_id
         self.state: Dict[int, GuildState] = {}
@@ -783,9 +781,6 @@ class DiscordCog(discord.ext.commands.Cog):
         volume: int | None,
     ):
         print("[ ] set")
-        if not self.ffmpeg_zmq_socket:
-            await interaction.response.send_message("Unsupported.", ephemeral=True)
-            return
         await self.__ensure_playing(interaction)
         effective_volume = min(max(volume, 0), 200) / 100 if volume else None
         options = PlaybackOptions(
@@ -864,6 +859,6 @@ class DiscordCog(discord.ext.commands.Cog):
     def __guild_state(self, guild_id: int) -> GuildState:
         if guild_id in self.state:
             return self.state[guild_id]
-        state = GuildState(guild_id, self.executor, self.ffmpeg_zmq_socket, self.bot)
+        state = GuildState(guild_id, self.executor, self.bot)
         self.state[guild_id] = state
         return state

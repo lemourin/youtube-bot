@@ -28,7 +28,6 @@ JELLYFIN_DEVICE_ID = os.environ.get("JELLYFIN_DEVICE_ID")
 JELLYFIN_LIBRARY_ID = os.environ.get("JELLYFIN_LIBRARY_ID")
 JELLYFIN_USERNAME = os.environ.get("JELLYFIN_USERNAME")
 JELLYFIN_PASSWORD = os.environ.get("JELLYFIN_PASSWORD")
-FFMPEG_ZMQ_SOCKET = os.environ.get("FFMPEG_ZMQ_SOCKET")
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -86,7 +85,6 @@ async def main() -> None:
                 DiscordCog(
                     bot,
                     executor,
-                    ffmpeg_zmq_socket=FFMPEG_ZMQ_SOCKET,
                     http=http_session,
                     discord_admin_id=DISCORD_ADMIN_ID,
                     jellyfin_client=jellyfin_client,
