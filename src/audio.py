@@ -356,7 +356,7 @@ class YTDLQueuedStreamAudio:
         message = await interaction.original_response()
         embed = message.embeds[0]
         add_to_embed(embed, options)
-        await interaction.edit_original_response(embed=embed)
+        await interaction.edit_original_response(embeds=[embed], attachments=[])
 
     def set_options(self, options: PlaybackOptions) -> None:
         with self.lock:
