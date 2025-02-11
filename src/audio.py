@@ -64,7 +64,7 @@ class YTDLBuffer(io.BufferedIOBase):
         return subprocess.Popen(
             args=args,
             stdout=asyncio.subprocess.PIPE,
-            bufsize=0,
+            bufsize=1024 * 1024,
         )
 
 
@@ -355,8 +355,12 @@ class YTDLQueuedStreamAudio:
     ) -> None:
         message = await interaction.original_response()
         embed = message.embeds[0]
+        if embed.image.url and embed.image.url.startswith(
+            "https://cdn.discordapp.com/attachments/"
+        ):
+            embed.set_image(url="attachment://artwork.jpg")
         add_to_embed(embed, options)
-        await interaction.edit_original_response(embeds=[embed], attachments=[])
+        await interaction.edit_original_response(embeds=message.embeds)
 
     def set_options(self, options: PlaybackOptions) -> None:
         with self.lock:
