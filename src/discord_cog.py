@@ -145,6 +145,26 @@ class DiscordCog(discord.ext.commands.Cog):
                 description="Alter properties of the currently playing audio.",
                 callback=self.set,
             ),
+            discord.app_commands.Command(
+                name="nightcore",
+                description="Apply nightcore filter to currently playing audio.",
+                callback=self.nightcore,
+            ),
+            discord.app_commands.Command(
+                name="bassboost",
+                description="Apply bassboost filter to currently playing audio.",
+                callback=self.bassboost,
+            ),
+            discord.app_commands.Command(
+                name="denightcore",
+                description="Negate nightcore filter applied to currently playing audio.",
+                callback=self.denightcore,
+            ),
+            discord.app_commands.Command(
+                name="debassboost",
+                description="Negate bassboost filter applied to currently playing audio.",
+                callback=self.debassboost,
+            ),
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
 
@@ -779,6 +799,7 @@ class DiscordCog(discord.ext.commands.Cog):
     @discord.app_commands.describe(
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
         bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
+        volume=PlaybackOptions.VOLUME_DOC,
     )
     async def set(
         self,
@@ -815,6 +836,44 @@ class DiscordCog(discord.ext.commands.Cog):
         state.set_volume(volume / 100)
         cast(YTDLSource, voice_client.source).volume = volume / 100
         await interaction.response.send_message(f"Volume set to {volume}%.")
+
+    @discord.app_commands.describe(factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC)
+    async def nightcore(
+        self, interaction: discord.Interaction, factor: float | None
+    ) -> None:
+        await self.set(
+            interaction,
+            nightcore_factor=factor or 1.1,
+            bassboost_factor=None,
+            volume=None,
+        )
+
+    @discord.app_commands.describe(factor=PlaybackOptions.BASSBOOST_FACTOR_DOC)
+    async def bassboost(
+        self, interaction: discord.Interaction, factor: float | None
+    ) -> None:
+        await self.set(
+            interaction,
+            nightcore_factor=None,
+            bassboost_factor=factor or 10.0,
+            volume=None,
+        )
+
+    async def denightcore(self, interaction: discord.Interaction) -> None:
+        await self.set(
+            interaction,
+            nightcore_factor=1,
+            bassboost_factor=None,
+            volume=None,
+        )
+
+    async def debassboost(self, interaction: discord.Interaction) -> None:
+        await self.set(
+            interaction,
+            nightcore_factor=None,
+            bassboost_factor=0.0,
+            volume=None,
+        )
 
     async def stop(self, interaction: discord.Interaction) -> None:
         print("[ ] stop")

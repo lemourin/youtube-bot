@@ -364,12 +364,14 @@ class YTDLQueuedStreamAudio:
 
     def set_options(self, options: PlaybackOptions) -> None:
         with self.lock:
-            if not self.queue or not self.queue[0].source:
+            if not self.queue:
                 return
-            source = self.queue[0].source
-            self.executor.submit(source.set_options, options)
+            queue = self.queue[0]
+            if not queue.source:
+                return
+            self.executor.submit(queue.source.set_options, options)
             asyncio.ensure_future(
-                self.__update_embed(self.queue[0].track.interaction, options),
+                self.__update_embed(queue.track.interaction, options),
                 loop=self.main_loop,
             )
 
