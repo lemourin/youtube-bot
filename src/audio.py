@@ -162,16 +162,16 @@ class YTDLStreamAudio(discord.FFmpegAudio):
         with zmq.Context() as context:
             socket = context.socket(zmq.REQ)
             with socket.connect(f"ipc://{self._temporary_file.name}"):
-                if options.nightcore_factor:
+                if options.nightcore_factor is not None:
                     self.__send_string(
                         socket, f"rubberband@1 tempo {options.nightcore_factor}"
                     )
                     self.__send_string(
                         socket, f"rubberband@1 pitch {options.nightcore_factor}"
                     )
-                if options.bassboost_factor:
+                if options.bassboost_factor is not None:
                     self.__send_string(socket, f"bass@1 g {options.bassboost_factor}")
-                if options.volume:
+                if options.volume is not None:
                     self.__send_string(socket, f"volume@1 volume {options.volume}")
 
 

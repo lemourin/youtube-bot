@@ -118,6 +118,13 @@ def yt_best_thumbnail_url(item: dict) -> str | None:
 
 
 def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
+    eps = 0.0001
+
+    def remove_field(embed: discord.Embed, name: str):
+        for i, field in enumerate(embed.fields):
+            if field.name == name:
+                embed.remove_field(i)
+
     def replace_field(embed: discord.Embed, name: str, value: Any):
         for i, field in enumerate(embed.fields):
             if field.name == name:
@@ -126,18 +133,31 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
                 return
         embed.add_field(name=name, value=value)
 
-    if options.nightcore_factor:
-        replace_field(embed, name="nightcore_factor", value=options.nightcore_factor)
-    if options.bassboost_factor:
-        replace_field(embed, name="bassboost_factor", value=options.bassboost_factor)
-    if options.filter_graph:
+    if options.nightcore_factor is not None:
+        if abs(1 - options.nightcore_factor) < eps:
+            remove_field(embed, name="nightcore_factor")
+        else:
+            replace_field(
+                embed, name="nightcore_factor", value=options.nightcore_factor
+            )
+    if options.bassboost_factor is not None:
+        if abs(options.bassboost_factor) < eps:
+            remove_field(embed, name="bassboost_factor")
+        else:
+            replace_field(
+                embed, name="bassboost_factor", value=options.bassboost_factor
+            )
+    if options.filter_graph is not None:
         replace_field(embed, name="filter_graph", value=options.filter_graph)
-    if options.start_timestamp:
+    if options.start_timestamp is not None:
         replace_field(embed, name="start_timestamp", value=options.start_timestamp)
-    if options.stop_timestamp:
+    if options.stop_timestamp is not None:
         replace_field(embed, name="stop_timestamp", value=options.stop_timestamp)
-    if options.volume:
-        replace_field(embed, name="volume", value=int(options.volume * 100))
+    if options.volume is not None:
+        if abs(1 - options.volume) < eps:
+            remove_field(embed, name="volume")
+        else:
+            replace_field(embed, name="volume", value=int(options.volume * 100))
 
 
 def yt_video_data_from_url(url: str) -> dict | None:
