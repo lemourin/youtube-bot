@@ -4,7 +4,7 @@ import asyncio
 import json
 import html
 import dataclasses
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Any
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 import aiohttp
 import discord
@@ -118,18 +118,25 @@ def yt_best_thumbnail_url(item: dict) -> str | None:
 
 
 def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
+    def replace_field(embed: discord.Embed, name: str, value: Any):
+        for i, field in enumerate(embed.fields):
+            if field.name == name:
+                embed.remove_field(i)
+                embed.add_field(name=name, value=value)
+                break
+
     if options.nightcore_factor:
-        embed.add_field(name="nightcore_factor", value=options.nightcore_factor)
+        replace_field(embed, name="nightcore_factor", value=options.nightcore_factor)
     if options.bassboost_factor:
-        embed.add_field(name="bassboost_factor", value=options.bassboost_factor)
+        replace_field(embed, name="bassboost_factor", value=options.bassboost_factor)
     if options.filter_graph:
-        embed.add_field(name="filter_graph", value=options.filter_graph)
+        replace_field(embed, name="filter_graph", value=options.filter_graph)
     if options.start_timestamp:
-        embed.add_field(name="start_timestamp", value=options.start_timestamp)
+        replace_field(embed, name="start_timestamp", value=options.start_timestamp)
     if options.stop_timestamp:
-        embed.add_field(name="stop_timestamp", value=options.stop_timestamp)
+        replace_field(embed, name="stop_timestamp", value=options.stop_timestamp)
     if options.volume:
-        embed.add_field(name="volume", value=int(options.volume * 100))
+        replace_field(embed, name="volume", value=int(options.volume * 100))
 
 
 def yt_video_data_from_url(url: str) -> dict | None:
