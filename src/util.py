@@ -8,7 +8,23 @@ from typing import Callable, Awaitable
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 import aiohttp
 import discord
-from src.audio import PlaybackOptions
+
+
+@dataclasses.dataclass
+class PlaybackOptions:
+    NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
+    BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
+    FILTER_GRAPH_DOC = "Custom ffmpeg audio filtering graph."
+    START_TIMESTAMP_DOC = "Start timestamp of audio playback. e.g. 4:20"
+    STOP_TIMESTAMP_DOC = "Stop timestamp of audio playback. e.g. 4:20"
+    VOLUME_DOC = "Volume of the audio. [0, 200]."
+
+    nightcore_factor: float | None = None
+    bassboost_factor: float | None = None
+    filter_graph: str | None = None
+    start_timestamp: str | None = None
+    stop_timestamp: str | None = None
+    volume: float | None = None
 
 
 @dataclasses.dataclass

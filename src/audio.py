@@ -10,25 +10,9 @@ from concurrent.futures import Executor
 from discord.opus import Encoder as OpusEncoder
 import discord
 import zmq
+from .util import add_to_embed, PlaybackOptions
 
 AUDIO_PACKET_SIZE = 3840
-
-
-@dataclasses.dataclass
-class PlaybackOptions:
-    NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
-    BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."
-    FILTER_GRAPH_DOC = "Custom ffmpeg audio filtering graph."
-    START_TIMESTAMP_DOC = "Start timestamp of audio playback. e.g. 4:20"
-    STOP_TIMESTAMP_DOC = "Stop timestamp of audio playback. e.g. 4:20"
-    VOLUME_DOC = "Volume of the audio. [0, 200]."
-
-    nightcore_factor: float | None = None
-    bassboost_factor: float | None = None
-    filter_graph: str | None = None
-    start_timestamp: str | None = None
-    stop_timestamp: str | None = None
-    volume: float | None = None
 
 
 class YTDLBuffer(io.BufferedIOBase):
@@ -366,12 +350,24 @@ class YTDLQueuedStreamAudio:
                 return None
             return self.queue[0].track.track_id
 
+    async def __update_embed(
+        self, interaction: discord.Interaction, options: PlaybackOptions
+    ) -> None:
+        message = await interaction.original_response()
+        embed = message.embeds[0]
+        add_to_embed(embed, options)
+        await interaction.edit_original_response(embed=embed)
+
     def set_options(self, options: PlaybackOptions) -> None:
         with self.lock:
             if not self.queue or not self.queue[0].source:
                 return
             source = self.queue[0].source
             self.executor.submit(source.set_options, options)
+            asyncio.ensure_future(
+                self.__update_embed(self.queue[0].track.interaction, options),
+                loop=self.main_loop,
+            )
 
     def current_position(self, track_id: int) -> int | None:
         with self.lock:

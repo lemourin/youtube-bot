@@ -4,8 +4,9 @@ from typing import cast
 import time
 import discord
 import discord.ext.commands
-from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack, PlaybackOptions
+from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack
 from src.discord_ui import View, ButtonView
+from .util import add_to_embed, PlaybackOptions
 
 AUDIO_BITRATE = 320
 
@@ -52,8 +53,13 @@ class GuildState:
             if track.on_dequeue:
                 await track.on_dequeue()
             if track.can_edit_message:
+                current = await track.interaction.original_response()
+                embed = current.embeds[0]
+                embed.clear_fields()
+                add_to_embed(embed, track.playback_options)
                 await track.interaction.edit_original_response(
-                    view=self.new_playback_control_view(track.interaction, track)
+                    embed=embed,
+                    view=self.new_playback_control_view(track.interaction, track),
                 )
 
     async def enqueue(
@@ -178,7 +184,9 @@ class GuildState:
         assert isinstance(interaction.user, discord.Member)
         if interaction.user.voice is None or interaction.user.voice.channel is None:
             await interaction.response.send_message(
-                "no voice channel, dumbass", ephemeral=True
+                "no voice channel, dumbass",
+                ephemeral=True,
+                delete_after=5,
             )
             raise discord.ext.commands.CommandError("not connected to a voice channel")
         return await interaction.user.voice.channel.connect()

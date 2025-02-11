@@ -13,7 +13,7 @@ import discord.ext.commands
 import validators
 import yt_dlp  # type: ignore
 from linkpreview import link_preview  # type: ignore
-from src.audio import YTDLSource, PlaybackOptions, AudioTrack
+from src.audio import YTDLSource, AudioTrack
 from src.guild_state import GuildState
 from src.discord_ui import ButtonView, SelectView, View
 from src.util import (
@@ -27,6 +27,7 @@ from src.util import (
     JellyfinLibraryClient,
     SearchEntry,
     MessageContent,
+    PlaybackOptions,
 )
 
 MAX_SIZE = 8_000_000
@@ -270,7 +271,7 @@ class DiscordCog(discord.ext.commands.Cog):
 
         if not self.youtube_client:
             await interaction.response.send_message(
-                "YouTube search not set up.", ephemeral=True
+                "YouTube search not set up.", ephemeral=True, delete_after=5
             )
             return
 
@@ -365,7 +366,7 @@ class DiscordCog(discord.ext.commands.Cog):
 
         if self.jellyfin_client is None:
             await interaction.response.send_message(
-                "Jellyfin not set up.", ephemeral=True
+                "Jellyfin not set up.", ephemeral=True, delete_after=5
             )
             return
 
@@ -557,7 +558,9 @@ class DiscordCog(discord.ext.commands.Cog):
     ):
         if interaction.user.id != self.discord_admin_id and filter_graph:
             await interaction.response.send_message(
-                "Not allowed to use the filter_graph option.", ephemeral=True
+                "Not allowed to use the filter_graph option.",
+                ephemeral=True,
+                delete_after=5,
             )
             raise discord.ext.commands.CommandError(
                 "Not authorized to use filter_graph option."
@@ -740,7 +743,7 @@ class DiscordCog(discord.ext.commands.Cog):
             message += f"{i + 1}. {track.title}\n"
 
         await interaction.response.send_message(
-            f"```{message}```" if message else "Empty.", ephemeral=True, delete_after=10
+            f"```{message}```" if message else "Empty.", ephemeral=True, delete_after=5
         )
 
     @discord.ext.commands.command()
@@ -760,14 +763,18 @@ class DiscordCog(discord.ext.commands.Cog):
         assert interaction.guild_id
         state = self.__guild_state(interaction.guild_id)
         await (await state.voice_client(interaction)).move_to(author.voice.channel)
-        await interaction.response.send_message("Joined.", ephemeral=True)
+        await interaction.response.send_message(
+            "Joined.", ephemeral=True, delete_after=5
+        )
 
     async def skip(self, interaction: discord.Interaction) -> None:
         print("[ ] skip")
         await self.__ensure_playing(interaction)
         assert interaction.guild
         await self.state[interaction.guild.id].skip()
-        await interaction.response.send_message("Skipped.", ephemeral=True)
+        await interaction.response.send_message(
+            "Skipped.", ephemeral=True, delete_after=5
+        )
 
     @discord.app_commands.describe(
         nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
@@ -790,10 +797,10 @@ class DiscordCog(discord.ext.commands.Cog):
         )
         assert interaction.guild
         await self.state[interaction.guild.id].set_options(options)
-        embed = discord.Embed()
-        add_to_embed(embed=embed, options=options)
         await interaction.response.send_message(
-            "Applied playback settings.", embed=embed
+            "Applied playback settings.",
+            ephemeral=True,
+            delete_after=5,
         )
 
     @discord.app_commands.describe(volume="Number from 0 to 200.")
@@ -825,22 +832,24 @@ class DiscordCog(discord.ext.commands.Cog):
         voice_client = state.current_voice_client()
         if voice_client is not None:
             await voice_client.disconnect(force=False)
-        await interaction.response.send_message("Left.", ephemeral=True)
+        await interaction.response.send_message("Left.", ephemeral=True, delete_after=5)
 
     async def die(self, interaction: discord.Interaction) -> None:
         print("[ ] die")
-        await interaction.response.send_message("About to die.", ephemeral=True)
+        await interaction.response.send_message(
+            "About to die.", ephemeral=True, delete_after=5
+        )
         sys.exit(0)
 
     async def ping(self, interaction: discord.Interaction) -> None:
         print("[ ] ping")
-        await interaction.response.send_message("Pong.", ephemeral=True)
+        await interaction.response.send_message("Pong.", ephemeral=True, delete_after=5)
 
     async def __ensure_voice(self, interaction: discord.Interaction) -> None:
         member = cast(discord.Member, interaction.user)
         if member.voice is None:
             await interaction.response.send_message(
-                "No voice channel, dumbass.", ephemeral=True
+                "No voice channel, dumbass.", ephemeral=True, delete_after=5
             )
             raise discord.ext.commands.CommandError("Not connected to a voice channel.")
 
@@ -852,7 +861,7 @@ class DiscordCog(discord.ext.commands.Cog):
             or not self.state[interaction.guild.id].is_playing()
         ):
             await interaction.response.send_message(
-                "Not playing, dumbass.", ephemeral=True
+                "Not playing, dumbass.", ephemeral=True, delete_after=5
             )
             raise discord.ext.commands.CommandError("Audio not playing.")
 
