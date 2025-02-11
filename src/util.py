@@ -122,8 +122,9 @@ def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
         for i, field in enumerate(embed.fields):
             if field.name == name:
                 embed.remove_field(i)
-                embed.add_field(name=name, value=value)
-                break
+                embed.insert_field_at(i, name=name, value=value)
+                return
+        embed.add_field(name=name, value=value)
 
     if options.nightcore_factor:
         replace_field(embed, name="nightcore_factor", value=options.nightcore_factor)
