@@ -204,7 +204,7 @@ class GuildState:
         def create_view(
             enable_skip: bool = True, enable_play_now: bool = True
         ) -> discord.ui.View:
-            view = View(on_timeout=on_timeout, timeout=300)
+            view = View(on_timeout=on_timeout, timeout=30 * 60)
             view.add_item(
                 ButtonView(
                     style=discord.ButtonStyle.red,
