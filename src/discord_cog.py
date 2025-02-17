@@ -732,6 +732,10 @@ class DiscordCog(discord.ext.commands.Cog):
             )
 
         async def on_reject(button_interaction: discord.Interaction):
+            if interaction.user.id != button_interaction.user.id:
+                return await button_interaction.response.send_message(
+                    "Fuck off.", ephemeral=True, delete_after=5
+                )
             await button_interaction.response.defer()
             await interaction.delete_original_response()
 
