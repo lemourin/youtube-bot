@@ -174,18 +174,9 @@ class DiscordCog(discord.ext.commands.Cog):
         assert interaction.guild_id
         track_id = self.next_track_id
         self.next_track_id += 1
-        track = AudioTrack(
-            url=url,
-            title=url,
-            track_id=track_id,
-            playback_options=options,
-            interaction=interaction,
-            can_edit_message=False,
-        )
         state = self.__guild_state(interaction.guild_id)
         voice_client = await state.voice_client(interaction)
         await interaction.response.defer()
-        await state.enqueue(voice_client, track)
 
         async def message_content_with_yt_dlp() -> MessageContent | None:
             details = await asyncio.to_thread(yt_video_data_from_url, url)
@@ -242,6 +233,18 @@ class DiscordCog(discord.ext.commands.Cog):
             message_content = MessageContent(title=url, url=url)
         if message_content.footer is None:
             message_content.footer = urlparse(url).hostname
+
+        track = AudioTrack(
+            url=url,
+            title=message_content.title,
+            track_id=track_id,
+            playback_options=options,
+            interaction=interaction,
+            can_edit_message=False,
+        )
+
+        await state.enqueue(voice_client, track)
+
         embed, attachments = await self.__create_embed(
             message_content,
             options,
