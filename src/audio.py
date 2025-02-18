@@ -355,10 +355,6 @@ class YTDLQueuedStreamAudio:
     ) -> None:
         message = await interaction.original_response()
         embed = message.embeds[0]
-        if embed.image.url and embed.image.url.startswith(
-            "https://cdn.discordapp.com/attachments/"
-        ):
-            embed.set_image(url="attachment://artwork.jpg")
         add_to_embed(embed, options)
         await interaction.edit_original_response(embeds=message.embeds)
 

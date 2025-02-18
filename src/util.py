@@ -118,6 +118,11 @@ def yt_best_thumbnail_url(item: dict) -> str | None:
 
 
 def add_to_embed(embed: discord.Embed, options: PlaybackOptions) -> None:
+    if embed.image.url and embed.image.url.startswith(
+        "https://cdn.discordapp.com/attachments/"
+    ):
+        embed.set_image(url="attachment://artwork.jpg")
+
     eps = 0.0001
 
     def remove_field(embed: discord.Embed, name: str):
