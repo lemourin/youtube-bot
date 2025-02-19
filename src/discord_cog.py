@@ -457,7 +457,7 @@ class DiscordCog(discord.ext.commands.Cog):
         url="A url to extract a video from.",
     )
     async def attach(self, interaction: discord.Interaction, url: str) -> None:
-        format_str = "b[filesize<8M] / w"
+        format_str = "b[filesize<8M]/bv[filesize<6M]+ba[filesize<2M]/b/bv+ba/bv/ba"
 
         await interaction.response.defer()
 
@@ -468,18 +468,20 @@ class DiscordCog(discord.ext.commands.Cog):
 
         @dataclasses.dataclass
         class Attachment:
-            url: str
+            url: str | None
             title: str
             inline_attachment: InlineAttachment | None = None
 
         def extract_content() -> Attachment:
-            with yt_dlp.YoutubeDL(params={"format": format_str}) as yt:
+            with yt_dlp.YoutubeDL(
+                params={"format": format_str, "format_sort": ["+size", "+br"]}
+            ) as yt:
                 info = yt.extract_info(url, download=False)
-                approx_size = info.get("filesize_approx")
+                size = info.get("filesize") or info.get("filesize_approx")
                 duration_seconds = info.get("duration")
                 ext = info["ext"]
 
-            attachment = Attachment(url=info["url"], title=info["title"])
+            attachment = Attachment(url=info.get("url"), title=info["title"])
 
             def read(stream: IO[bytes]) -> bytes:
                 chunks: list[bytes] = []
@@ -497,7 +499,7 @@ class DiscordCog(discord.ext.commands.Cog):
 
             audio_bitrate = None
             video_bitrate = None
-            if not approx_size or approx_size > MAX_SIZE:
+            if not size or size > MAX_SIZE:
                 if not duration_seconds:
                     return attachment
                 audio_bitrate = 64000
@@ -569,8 +571,10 @@ class DiscordCog(discord.ext.commands.Cog):
                         filename=f"file.{attachment.inline_attachment.ext}",
                     ),
                 )
-            else:
+            elif attachment.url is not None:
                 await interaction.followup.send(content=attachment.url)
+            else:
+                await interaction.followup.send("Failed to extract a video.")
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
         except yt_dlp.utils.YoutubeDLError:
