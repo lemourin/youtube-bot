@@ -66,7 +66,10 @@ async def main() -> None:
             device_id=JELLYFIN_DEVICE_ID,
         )
         client.auth.connect_to_address(JELLYFIN_ADDRESS)
-        client.auth.login(JELLYFIN_ADDRESS, JELLYFIN_USERNAME, JELLYFIN_PASSWORD)
+        if not client.auth.login(
+            JELLYFIN_ADDRESS, JELLYFIN_USERNAME, JELLYFIN_PASSWORD
+        ):
+            raise RuntimeError("Jellyfin login failed.")
         jellyfin_client = JellyfinLibraryClient(
             client, JELLYFIN_LIBRARY_ID, JELLYFIN_ADDRESS
         )
