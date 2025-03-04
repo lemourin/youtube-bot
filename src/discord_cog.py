@@ -30,7 +30,7 @@ from src.util import (
     PlaybackOptions,
 )
 
-MAX_SIZE = 8_000_000
+MAX_SIZE = 10_000_000
 PAGE_SIZE = 4096
 
 
