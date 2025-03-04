@@ -479,7 +479,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 info = yt.extract_info(url, download=False)
                 size = info.get("filesize") or info.get("filesize_approx")
                 duration_seconds = info.get("duration")
-                ext = info["ext"]
+                ext = info["ext"] if info["ext"] != "mkv" else "webm"
 
             attachment = Attachment(url=info.get("url"), title=info["title"])
 
@@ -508,14 +508,24 @@ class DiscordCog(discord.ext.commands.Cog):
                     return attachment
 
             with subprocess.Popen(
-                args=[
-                    "yt-dlp",
-                    url,
-                    "-f",
-                    format_str,
-                    "-o",
-                    "-",
-                ],
+                args=(
+                    [
+                        "yt-dlp",
+                        url,
+                        "-f",
+                        format_str,
+                        "-o",
+                        "-",
+                    ]
+                    + (
+                        [
+                            "--external-downloader-args",
+                            "ffmpeg:-f mp4 -movflags frag_keyframe+empty_moov",
+                        ]
+                        if ext == "mp4"
+                        else []
+                    )
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 bufsize=0,
             ) as input_data:
