@@ -684,9 +684,10 @@ class DiscordCog(discord.ext.commands.Cog):
         async def on_selected(selection_interaction: discord.Interaction) -> None:
             nonlocal dismissed
             if interaction.user.id != selection_interaction.user.id:
-                return await selection_interaction.response.send_message(
+                await selection_interaction.response.send_message(
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
+                return
             async with dismissed_lock:
                 await selection_interaction.response.defer()
 
