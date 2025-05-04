@@ -474,7 +474,11 @@ class DiscordCog(discord.ext.commands.Cog):
 
         def extract_content() -> Attachment:
             with yt_dlp.YoutubeDL(
-                params={"format": format_str, "format_sort": ["+size", "+br"]}
+                params={
+                    "format": format_str,
+                    "format_sort": ["+size", "+br"],
+                    "cookiefile": "cookie.txt",
+                }
             ) as yt:
                 info = yt.extract_info(url, download=False)
                 size = info.get("filesize") or info.get("filesize_approx")
@@ -511,6 +515,8 @@ class DiscordCog(discord.ext.commands.Cog):
                 args=(
                     [
                         "yt-dlp",
+                        "--cookies",
+                        "cookie.txt",
                         url,
                         "-f",
                         format_str,
