@@ -457,7 +457,7 @@ class DiscordCog(discord.ext.commands.Cog):
         url="A url to extract a video from.",
     )
     async def attach(self, interaction: discord.Interaction, url: str) -> None:
-        format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/bv[vcodec!*=av01]/ba"
+        format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
 
         await interaction.response.defer()
 
