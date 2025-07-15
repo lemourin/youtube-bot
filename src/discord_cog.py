@@ -481,7 +481,6 @@ class DiscordCog(discord.ext.commands.Cog):
                 }
             ) as yt:
                 info = yt.extract_info(url, download=False)
-                size = info.get("filesize") or info.get("filesize_approx")
                 duration_seconds = info.get("duration")
                 ext = info["ext"] if info["ext"] != "mkv" else "webm"
 
@@ -501,15 +500,12 @@ class DiscordCog(discord.ext.commands.Cog):
                 print(f"[ ] attachment size = {size}")
                 return b"".join(chunks)
 
-            audio_bitrate = None
-            video_bitrate = None
-            if not size or size > MAX_SIZE:
-                if not duration_seconds:
-                    return attachment
-                audio_bitrate = 64000
-                video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
-                if video_bitrate < 1000:
-                    return attachment
+            if not duration_seconds:
+                return attachment
+            audio_bitrate = 64000
+            video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
+            if video_bitrate < 1000:
+                return attachment
 
             with subprocess.Popen(
                 args=(
@@ -535,25 +531,19 @@ class DiscordCog(discord.ext.commands.Cog):
                 stdout=asyncio.subprocess.PIPE,
                 bufsize=0,
             ) as input_data:
-                if audio_bitrate is None or video_bitrate is None:
-                    assert input_data.stdout
-                    attachment.inline_attachment = InlineAttachment(
-                        content=read(input_data.stdout), ext=ext
-                    )
-                    return attachment
                 with subprocess.Popen(
                     args=[
                         "ffmpeg",
                         "-i",
                         "-",
                         "-c:v",
-                        "h264_videotoolbox",
+                        "libx264",
                         "-pix_fmt",
                         "yuv420p",
                         "-b:v",
                         f"{video_bitrate}",
                         "-c:a",
-                        "aac_at",
+                        "aac",
                         "-b:a",
                         f"{audio_bitrate}",
                         "-f",
