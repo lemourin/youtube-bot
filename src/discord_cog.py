@@ -496,7 +496,9 @@ class DiscordCog(discord.ext.commands.Cog):
                     chunks.append(chunk)
                     size += len(chunk)
                     if size > MAX_SIZE:
-                        raise discord.ext.commands.CommandError("Attachment too large!")
+                        raise discord.ext.commands.CommandError(
+                            f"Attachment too large ({size / (2**20)} Mb)!"
+                        )
                 print(f"[ ] attachment size = {size}")
                 return b"".join(chunks)
 
@@ -542,6 +544,10 @@ class DiscordCog(discord.ext.commands.Cog):
                         "yuv420p",
                         "-b:v",
                         f"{video_bitrate}",
+                        "-maxrate",
+                        f"{video_bitrate}",
+                        "-bufsize",
+                        "1M",
                         "-c:a",
                         "aac",
                         "-b:a",
