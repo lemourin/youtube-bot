@@ -523,7 +523,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     ],
                     stdout=asyncio.subprocess.PIPE,
                 ) as input_data,
-                tempfile.NamedTemporaryFile(delete_on_close=False) as file,
+                tempfile.TemporaryFile() as file,
                 subprocess.Popen(
                     args=[
                         "ffmpeg",
@@ -546,10 +546,13 @@ class DiscordCog(discord.ext.commands.Cog):
                         "-y",
                         "-f",
                         "mp4",
-                        file.name,
+                        "-fd",
+                        f"{file.fileno()}",
+                        "fd:",
                     ],
                     stdin=input_data.stdout,
                     stdout=sys.stdout,
+                    pass_fds=[file.fileno()],
                 ) as postproc,
             ):
                 try:
@@ -558,6 +561,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         raise discord.ext.commands.CommandError(
                             f"ffmpeg error {ret_code}"
                         )
+                    file.seek(0)
                     attachment.inline_attachment = InlineAttachment(
                         content=read(file),
                         ext="mp4",
