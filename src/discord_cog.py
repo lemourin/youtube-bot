@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 from typing import cast, Dict, Any, Tuple, IO
 import io
 import sys
@@ -482,7 +483,6 @@ class DiscordCog(discord.ext.commands.Cog):
             ) as yt:
                 info = yt.extract_info(url, download=False)
                 duration_seconds = info.get("duration")
-                ext = info["ext"] if info["ext"] != "mkv" else "webm"
 
             attachment = Attachment(url=info.get("url"), title=info["title"])
 
@@ -509,9 +509,9 @@ class DiscordCog(discord.ext.commands.Cog):
             if video_bitrate < 1000:
                 return attachment
 
-            with subprocess.Popen(
-                args=(
-                    [
+            with (
+                subprocess.Popen(
+                    args=[
                         "yt-dlp",
                         "--cookies",
                         "cookie.txt",
@@ -520,20 +520,11 @@ class DiscordCog(discord.ext.commands.Cog):
                         format_str,
                         "-o",
                         "-",
-                    ]
-                    + (
-                        [
-                            "--external-downloader-args",
-                            "ffmpeg:-f mp4 -movflags frag_keyframe+empty_moov",
-                        ]
-                        if ext == "mp4"
-                        else []
-                    )
-                ),
-                stdout=asyncio.subprocess.PIPE,
-                bufsize=0,
-            ) as input_data:
-                with subprocess.Popen(
+                    ],
+                    stdout=asyncio.subprocess.PIPE,
+                ) as input_data,
+                tempfile.NamedTemporaryFile() as file,
+                subprocess.Popen(
                     args=[
                         "ffmpeg",
                         "-i",
@@ -552,26 +543,29 @@ class DiscordCog(discord.ext.commands.Cog):
                         "aac",
                         "-b:a",
                         f"{audio_bitrate}",
+                        "-y",
                         "-f",
                         "mp4",
-                        "-movflags",
-                        "frag_keyframe+empty_moov",
-                        "-",
+                        file.name,
                     ],
                     stdin=input_data.stdout,
-                    stdout=asyncio.subprocess.PIPE,
-                    bufsize=0,
-                ) as postproc:
-                    try:
-                        assert postproc.stdout
-                        attachment.inline_attachment = InlineAttachment(
-                            content=read(postproc.stdout),
-                            ext="mp4",
+                    stdout=sys.stdout,
+                ) as postproc,
+            ):
+                try:
+                    ret_code = postproc.wait()
+                    if ret_code != 0:
+                        raise discord.ext.commands.CommandError(
+                            f"ffmpeg error {ret_code}"
                         )
-                        return attachment
-                    except discord.ext.commands.CommandError as e:
-                        print(f"[ ] failed to inline attachment: {e}")
-                        return attachment
+                    attachment.inline_attachment = InlineAttachment(
+                        content=read(file),
+                        ext="mp4",
+                    )
+                    return attachment
+                except discord.ext.commands.CommandError as e:
+                    print(f"[ ] failed to inline attachment: {e}")
+                    return attachment
 
         try:
             attachment = await asyncio.to_thread(extract_content)
