@@ -523,7 +523,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     ],
                     stdout=asyncio.subprocess.PIPE,
                 ) as input_data,
-                tempfile.NamedTemporaryFile() as file,
+                tempfile.NamedTemporaryFile(delete_on_close=False) as file,
                 subprocess.Popen(
                     args=[
                         "ffmpeg",
