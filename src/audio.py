@@ -10,7 +10,7 @@ from concurrent.futures import Executor
 from discord.opus import Encoder as OpusEncoder
 import discord
 import zmq
-from .util import add_to_embed, PlaybackOptions
+from .util import add_to_embed, ytdl_time_range, audio_filter_graph, PlaybackOptions
 
 AUDIO_PACKET_SIZE = 3840
 
@@ -47,17 +47,8 @@ class YTDLBuffer(io.BufferedIOBase):
             "--download-sections",
             "*from-url",
         ]
-        if options.start_timestamp is not None or options.stop_timestamp is not None:
-            range_opt = ""
-            range_opt += (
-                options.start_timestamp
-                if options.start_timestamp is not None
-                else "0:00"
-            )
-            range_opt += "-"
-            range_opt += (
-                options.stop_timestamp if options.stop_timestamp is not None else "inf"
-            )
+        range_opt = ytdl_time_range(options)
+        if range_opt:
             args.append("--download-sections")
             args.append(f"*{range_opt}")
         print("[ ] yt-dlp", *args)
@@ -87,26 +78,12 @@ class YTDLStreamAudio(discord.FFmpegAudio):
         self._buffer = YTDLBuffer(url, options)
         self._temporary_file = tempfile.NamedTemporaryFile()
 
-        filter_graph = f"azmq=b=ipc\\\\://{self._temporary_file.name},"
-
-        nightcore_factor = (
-            options.nightcore_factor if options.nightcore_factor is not None else 1.0
-        )
-        filter_graph += (
-            f"rubberband@1=tempo={nightcore_factor}:pitch={nightcore_factor}"
-        )
-
-        bassboost_factor = (
-            options.bassboost_factor if options.bassboost_factor is not None else 0.0
-        )
-        filter_graph += f",bass@1=g={bassboost_factor}"
-
-        filter_graph += (
-            f",volume@1=volume={options.volume if options.volume is not None else 1.0}"
-        )
-
-        if options.filter_graph is not None:
-            filter_graph += f",{options.filter_graph}"
+        if not options.nightcore_factor:
+            options.nightcore_factor = 1.0
+        if not options.bassboost_factor:
+            options.bassboost_factor = 0.0
+        if not options.volume:
+            options.volume = 1.0
 
         super().__init__(
             source=self._buffer,
@@ -126,7 +103,7 @@ class YTDLStreamAudio(discord.FFmpegAudio):
                 "-loglevel",
                 "error",
                 "-af",
-                filter_graph,
+                f"azmq=b=ipc\\\\://{self._temporary_file.name},{audio_filter_graph(options)}",
                 "-",
             ],
             stdin=subprocess.PIPE,

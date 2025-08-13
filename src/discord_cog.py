@@ -25,6 +25,8 @@ from src.util import (
     trim_option_text,
     add_to_embed,
     duration_to_str,
+    audio_filter_graph,
+    ytdl_time_range,
     JellyfinLibraryClient,
     SearchEntry,
     MessageContent,
@@ -42,7 +44,6 @@ class InlineAttachment:
 
 @dataclasses.dataclass
 class Attachment:
-    url: str | None
     title: str
     inline_attachment: InlineAttachment | None = None
 
@@ -65,7 +66,22 @@ def read(stream: IO[bytes]) -> bytes:
     return b"".join(chunks)
 
 
-def extract_content(url: str) -> Attachment:
+def timestamp_to_seconds(timestamp: str) -> int:
+    nums = list(reversed([int(x) for x in timestamp.split(":")]))
+    if len(nums) > 3:
+        raise discord.ext.commands.CommandError("Invalid timestamp!")
+    print(nums)
+    ts = 0
+    if len(nums) >= 1:
+        ts += nums[0]
+    if len(nums) >= 2:
+        ts += 60 * nums[1]
+    if len(nums) >= 3:
+        ts += 3600 * nums[2]
+    return ts
+
+
+def extract_content(url: str, options: PlaybackOptions) -> Attachment:
     format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
 
     with yt_dlp.YoutubeDL(
@@ -78,27 +94,46 @@ def extract_content(url: str) -> Attachment:
         info = yt.extract_info(url, download=False)
         duration_seconds = info.get("duration")
 
-    attachment = Attachment(url=info.get("url"), title=info["title"])
-
     if not duration_seconds:
-        return attachment
+        raise discord.ext.commands.CommandError("Duration unknown!")
+
+    if options.start_timestamp is not None and options.stop_timestamp is not None:
+        duration_seconds = (
+            timestamp_to_seconds(options.stop_timestamp)
+            - timestamp_to_seconds(options.start_timestamp)
+            + 1
+        )
+    elif options.start_timestamp is not None:
+        duration_seconds -= timestamp_to_seconds(options.start_timestamp)
+    elif options.stop_timestamp is not None:
+        duration_seconds = timestamp_to_seconds(options.stop_timestamp) + 1
+
+    if duration_seconds <= 1:
+        raise discord.ext.commands.CommandError("Invalid duration!")
+
     audio_bitrate = 64000
     video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
-    if video_bitrate < 1000:
-        return attachment
+    if video_bitrate < 2500:
+        raise discord.ext.commands.CommandError("File too big!")
+
+    time_range = ytdl_time_range(options)
+    graph = audio_filter_graph(options)
 
     with (
         subprocess.Popen(
-            args=[
-                "yt-dlp",
-                "--cookies",
-                "cookie.txt",
-                url,
-                "-f",
-                format_str,
-                "-o",
-                "-",
-            ],
+            args=(
+                [
+                    "yt-dlp",
+                    "--cookies",
+                    "cookie.txt",
+                    url,
+                    "-f",
+                    format_str,
+                    "-o",
+                    "-",
+                ]
+                + (["--download-sections", f"*{time_range}"] if time_range else [])
+            ),
             stdout=asyncio.subprocess.PIPE,
         ) as input_data,
         tempfile.TemporaryFile() as file,
@@ -124,6 +159,9 @@ def extract_content(url: str) -> Attachment:
                 "-y",
                 "-f",
                 "mp4",
+            ]
+            + (["-af", graph] if graph else [])
+            + [
                 "-fd",
                 f"{file.fileno()}",
                 "fd:",
@@ -133,19 +171,14 @@ def extract_content(url: str) -> Attachment:
             pass_fds=[file.fileno()],
         ) as postproc,
     ):
-        try:
-            ret_code = postproc.wait()
-            if ret_code != 0:
-                raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
-            file.seek(0)
-            attachment.inline_attachment = InlineAttachment(
-                content=read(file),
-                ext="mp4",
-            )
-            return attachment
-        except discord.ext.commands.CommandError as e:
-            print(f"[ ] failed to inline attachment: {e}")
-            return attachment
+        ret_code = postproc.wait()
+        if ret_code != 0:
+            raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
+        file.seek(0)
+        return Attachment(
+            title=info["title"],
+            inline_attachment=InlineAttachment(content=read(file), ext="mp4"),
+        )
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -569,11 +602,39 @@ class DiscordCog(discord.ext.commands.Cog):
 
     @discord.app_commands.describe(
         url="A url to extract a video from.",
+        nightcore_factor=PlaybackOptions.NIGHTCORE_FACTOR_DOC,
+        bassboost_factor=PlaybackOptions.BASSBOOST_FACTOR_DOC,
+        filter_graph=PlaybackOptions.FILTER_GRAPH_DOC,
+        start_timestamp=PlaybackOptions.START_TIMESTAMP_DOC,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP_DOC,
+        volume=PlaybackOptions.VOLUME_DOC,
     )
-    async def attach(self, interaction: discord.Interaction, url: str) -> None:
+    async def attach(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        nightcore_factor: float | None,
+        bassboost_factor: float | None,
+        filter_graph: str | None,
+        start_timestamp: str | None,
+        stop_timestamp: str | None,
+        volume: int | None,
+    ) -> None:
         await interaction.response.defer()
         try:
-            attachment = await asyncio.to_thread(lambda: extract_content(url))
+            attachment = await asyncio.to_thread(
+                lambda: extract_content(
+                    url,
+                    options=PlaybackOptions(
+                        nightcore_factor=nightcore_factor,
+                        bassboost_factor=bassboost_factor,
+                        filter_graph=filter_graph,
+                        start_timestamp=start_timestamp,
+                        stop_timestamp=stop_timestamp,
+                        volume=min(max(volume, 0), 200) / 100 if volume else None,
+                    ),
+                )
+            )
             if attachment.inline_attachment is not None:
                 await interaction.followup.send(
                     content=f"## {attachment.title}",
@@ -582,8 +643,6 @@ class DiscordCog(discord.ext.commands.Cog):
                         filename=f"file.{attachment.inline_attachment.ext}",
                     ),
                 )
-            elif attachment.url is not None:
-                await interaction.followup.send(content=attachment.url)
             else:
                 await interaction.followup.send("Failed to extract a video.")
         except discord.ext.commands.CommandError as e:

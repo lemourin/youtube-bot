@@ -204,3 +204,36 @@ async def read_at_most(stream: aiohttp.streams.StreamReader, n: int) -> bytes:
         blocks.append(chunk)
         n -= len(chunk)
     return b"".join(blocks)
+
+
+def audio_filter_graph(options: PlaybackOptions) -> str | None:
+    filter_graph: list[str] = []
+    if options.nightcore_factor:
+        filter_graph.append(
+            f"rubberband@1=tempo={options.nightcore_factor}:pitch={options.nightcore_factor}"
+        )
+
+    if options.bassboost_factor:
+        filter_graph.append(f"bass@1=g={options.bassboost_factor}")
+
+    if options.volume is not None:
+        filter_graph.append(f"volume@1=volume={options.volume}")
+
+    if options.filter_graph is not None:
+        filter_graph.append(options.filter_graph)
+
+    return ",".join(filter_graph) if len(filter_graph) > 0 else None
+
+
+def ytdl_time_range(options: PlaybackOptions) -> str | None:
+    if options.start_timestamp is None and options.stop_timestamp is None:
+        return None
+
+    range_opt = ""
+    range_opt += (
+        options.start_timestamp if options.start_timestamp is not None else "0:00"
+    )
+    range_opt += "-"
+    range_opt += options.stop_timestamp if options.stop_timestamp is not None else "inf"
+
+    return range_opt
