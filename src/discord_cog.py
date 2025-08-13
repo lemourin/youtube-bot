@@ -32,7 +32,120 @@ from src.util import (
 )
 
 MAX_SIZE = 10_000_000
-PAGE_SIZE = 4096
+
+
+@dataclasses.dataclass
+class InlineAttachment:
+    content: bytes
+    ext: str
+
+
+@dataclasses.dataclass
+class Attachment:
+    url: str | None
+    title: str
+    inline_attachment: InlineAttachment | None = None
+
+
+def read(stream: IO[bytes]) -> bytes:
+    page_size = 4096
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = stream.read(page_size)
+        if len(chunk) == 0:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > MAX_SIZE:
+            raise discord.ext.commands.CommandError(
+                f"Attachment too large ({size / (2**20)} Mb)!"
+            )
+    print(f"[ ] attachment size = {size}")
+    return b"".join(chunks)
+
+
+def extract_content(url: str) -> Attachment:
+    format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
+
+    with yt_dlp.YoutubeDL(
+        params={
+            "format": format_str,
+            "format_sort": ["+size", "+br"],
+            "cookiefile": "cookie.txt",
+        }
+    ) as yt:
+        info = yt.extract_info(url, download=False)
+        duration_seconds = info.get("duration")
+
+    attachment = Attachment(url=info.get("url"), title=info["title"])
+
+    if not duration_seconds:
+        return attachment
+    audio_bitrate = 64000
+    video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
+    if video_bitrate < 1000:
+        return attachment
+
+    with (
+        subprocess.Popen(
+            args=[
+                "yt-dlp",
+                "--cookies",
+                "cookie.txt",
+                url,
+                "-f",
+                format_str,
+                "-o",
+                "-",
+            ],
+            stdout=asyncio.subprocess.PIPE,
+        ) as input_data,
+        tempfile.TemporaryFile() as file,
+        subprocess.Popen(
+            args=[
+                "ffmpeg",
+                "-i",
+                "-",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-b:v",
+                f"{video_bitrate}",
+                "-maxrate",
+                f"{video_bitrate}",
+                "-bufsize",
+                "1M",
+                "-c:a",
+                "aac",
+                "-b:a",
+                f"{audio_bitrate}",
+                "-y",
+                "-f",
+                "mp4",
+                "-fd",
+                f"{file.fileno()}",
+                "fd:",
+            ],
+            stdin=input_data.stdout,
+            stdout=sys.stdout,
+            pass_fds=[file.fileno()],
+        ) as postproc,
+    ):
+        try:
+            ret_code = postproc.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
+            file.seek(0)
+            attachment.inline_attachment = InlineAttachment(
+                content=read(file),
+                ext="mp4",
+            )
+            return attachment
+        except discord.ext.commands.CommandError as e:
+            print(f"[ ] failed to inline attachment: {e}")
+            return attachment
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -458,121 +571,9 @@ class DiscordCog(discord.ext.commands.Cog):
         url="A url to extract a video from.",
     )
     async def attach(self, interaction: discord.Interaction, url: str) -> None:
-        format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
-
         await interaction.response.defer()
-
-        @dataclasses.dataclass
-        class InlineAttachment:
-            content: bytes
-            ext: str
-
-        @dataclasses.dataclass
-        class Attachment:
-            url: str | None
-            title: str
-            inline_attachment: InlineAttachment | None = None
-
-        def extract_content() -> Attachment:
-            with yt_dlp.YoutubeDL(
-                params={
-                    "format": format_str,
-                    "format_sort": ["+size", "+br"],
-                    "cookiefile": "cookie.txt",
-                }
-            ) as yt:
-                info = yt.extract_info(url, download=False)
-                duration_seconds = info.get("duration")
-
-            attachment = Attachment(url=info.get("url"), title=info["title"])
-
-            def read(stream: IO[bytes]) -> bytes:
-                chunks: list[bytes] = []
-                size = 0
-                while True:
-                    chunk = stream.read(PAGE_SIZE)
-                    if len(chunk) == 0:
-                        break
-                    chunks.append(chunk)
-                    size += len(chunk)
-                    if size > MAX_SIZE:
-                        raise discord.ext.commands.CommandError(
-                            f"Attachment too large ({size / (2**20)} Mb)!"
-                        )
-                print(f"[ ] attachment size = {size}")
-                return b"".join(chunks)
-
-            if not duration_seconds:
-                return attachment
-            audio_bitrate = 64000
-            video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
-            if video_bitrate < 1000:
-                return attachment
-
-            with (
-                subprocess.Popen(
-                    args=[
-                        "yt-dlp",
-                        "--cookies",
-                        "cookie.txt",
-                        url,
-                        "-f",
-                        format_str,
-                        "-o",
-                        "-",
-                    ],
-                    stdout=asyncio.subprocess.PIPE,
-                ) as input_data,
-                tempfile.TemporaryFile() as file,
-                subprocess.Popen(
-                    args=[
-                        "ffmpeg",
-                        "-i",
-                        "-",
-                        "-c:v",
-                        "libx264",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-b:v",
-                        f"{video_bitrate}",
-                        "-maxrate",
-                        f"{video_bitrate}",
-                        "-bufsize",
-                        "1M",
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        f"{audio_bitrate}",
-                        "-y",
-                        "-f",
-                        "mp4",
-                        "-fd",
-                        f"{file.fileno()}",
-                        "fd:",
-                    ],
-                    stdin=input_data.stdout,
-                    stdout=sys.stdout,
-                    pass_fds=[file.fileno()],
-                ) as postproc,
-            ):
-                try:
-                    ret_code = postproc.wait()
-                    if ret_code != 0:
-                        raise discord.ext.commands.CommandError(
-                            f"ffmpeg error {ret_code}"
-                        )
-                    file.seek(0)
-                    attachment.inline_attachment = InlineAttachment(
-                        content=read(file),
-                        ext="mp4",
-                    )
-                    return attachment
-                except discord.ext.commands.CommandError as e:
-                    print(f"[ ] failed to inline attachment: {e}")
-                    return attachment
-
         try:
-            attachment = await asyncio.to_thread(extract_content)
+            attachment = await asyncio.to_thread(lambda: extract_content(url))
             if attachment.inline_attachment is not None:
                 await interaction.followup.send(
                     content=f"## {attachment.title}",
