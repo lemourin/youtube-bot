@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 from typing import cast, Dict, Any, Tuple, IO
 import io
+import os
 import sys
 import functools
 from urllib.parse import urlparse
@@ -31,6 +32,7 @@ from src.util import (
     SearchEntry,
     MessageContent,
     PlaybackOptions,
+    FileStorageOptions,
 )
 
 MAX_SIZE = 10_000_000
@@ -45,6 +47,7 @@ class InlineAttachment:
 @dataclasses.dataclass
 class Attachment:
     title: str
+    url: str | None = None
     inline_attachment: InlineAttachment | None = None
 
 
@@ -81,7 +84,9 @@ def timestamp_to_seconds(timestamp: str) -> int:
     return ts
 
 
-def extract_content(url: str, options: PlaybackOptions) -> Attachment:
+def extract_content(
+    url: str, options: PlaybackOptions, storage_options: FileStorageOptions | None
+) -> Attachment:
     format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
 
     with yt_dlp.YoutubeDL(
@@ -119,6 +124,15 @@ def extract_content(url: str, options: PlaybackOptions) -> Attachment:
     time_range = ytdl_time_range(options)
     graph = audio_filter_graph(options)
 
+    def create_file():
+        if storage_options:
+            file = tempfile.NamedTemporaryFile(
+                dir=storage_options.storage_path, suffix=".mp4", delete=False
+            )
+            os.chmod(file.fileno(), mode=0o644)
+            return file
+        return tempfile.TemporaryFile()
+
     with (
         subprocess.Popen(
             args=(
@@ -136,7 +150,7 @@ def extract_content(url: str, options: PlaybackOptions) -> Attachment:
             ),
             stdout=asyncio.subprocess.PIPE,
         ) as input_data,
-        tempfile.TemporaryFile() as file,
+        create_file() as file,
         subprocess.Popen(
             args=[
                 "ffmpeg",
@@ -175,6 +189,12 @@ def extract_content(url: str, options: PlaybackOptions) -> Attachment:
         if ret_code != 0:
             raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
         file.seek(0)
+        if storage_options:
+            return Attachment(
+                title=info["title"],
+                url=f"{storage_options.url_path}{os.path.basename(file.name)}",
+            )
+
         return Attachment(
             title=info["title"],
             inline_attachment=InlineAttachment(content=read(file), ext="mp4"),
@@ -190,6 +210,7 @@ class DiscordCog(discord.ext.commands.Cog):
         discord_admin_id: int,
         jellyfin_client: JellyfinLibraryClient | None = None,
         youtube_client: Any = None,
+        file_storage_options: FileStorageOptions | None = None,
     ) -> None:
         self.bot = bot
         self.executor = executor
@@ -198,6 +219,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
+        self.file_storage_options = file_storage_options
         self.next_track_id = 0
 
         @bot.event
@@ -633,6 +655,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         stop_timestamp=stop_timestamp,
                         volume=min(max(volume, 0), 200) / 100 if volume else None,
                     ),
+                    storage_options=self.file_storage_options,
                 )
             )
             if attachment.inline_attachment is not None:
@@ -643,6 +666,8 @@ class DiscordCog(discord.ext.commands.Cog):
                         filename=f"file.{attachment.inline_attachment.ext}",
                     ),
                 )
+            elif attachment.url is not None:
+                await interaction.followup.send(content=attachment.url)
             else:
                 await interaction.followup.send("Failed to extract a video.")
         except discord.ext.commands.CommandError as e:

@@ -11,6 +11,12 @@ import discord
 
 
 @dataclasses.dataclass
+class FileStorageOptions:
+    storage_path: str
+    url_path: str
+
+
+@dataclasses.dataclass
 class PlaybackOptions:
     NIGHTCORE_FACTOR_DOC = "Factor of how much to speed up the audio. [0.5, 1.5]."
     BASSBOOST_FACTOR_DOC = "Factor of how much to bassboost the audio. [-10, 10]."

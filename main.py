@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import googleapiclient.discovery  # type: ignore
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 from src.discord_cog import DiscordCog, JellyfinLibraryClient
+from src.util import FileStorageOptions
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 
@@ -28,6 +29,8 @@ JELLYFIN_DEVICE_ID = os.environ.get("JELLYFIN_DEVICE_ID")
 JELLYFIN_LIBRARY_ID = os.environ.get("JELLYFIN_LIBRARY_ID")
 JELLYFIN_USERNAME = os.environ.get("JELLYFIN_USERNAME")
 JELLYFIN_PASSWORD = os.environ.get("JELLYFIN_PASSWORD")
+FILE_STORAGE_PATH = os.environ.get("FILE_STORAGE_PATH")
+FILE_URL_PATH = os.environ.get("FILE_URL_PATH")
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -92,6 +95,13 @@ async def main() -> None:
                     discord_admin_id=DISCORD_ADMIN_ID,
                     jellyfin_client=jellyfin_client,
                     youtube_client=youtube_client,
+                    file_storage_options=(
+                        FileStorageOptions(
+                            storage_path=FILE_STORAGE_PATH, url_path=FILE_URL_PATH
+                        )
+                        if FILE_STORAGE_PATH and FILE_URL_PATH
+                        else None
+                    ),
                 )
             )
             await asyncio.gather(
