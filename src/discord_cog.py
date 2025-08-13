@@ -116,9 +116,9 @@ def extract_content(
     if duration_seconds <= 1:
         raise discord.ext.commands.CommandError("Invalid duration!")
 
-    audio_bitrate = 64000
-    video_bitrate = 6 * MAX_SIZE / duration_seconds - audio_bitrate
-    if video_bitrate < 2500:
+    audio_bitrate = 64_000
+    video_bitrate = min(6 * MAX_SIZE / duration_seconds - audio_bitrate, 4_096_000)
+    if video_bitrate < 64_000:
         raise discord.ext.commands.CommandError("File too big!")
 
     time_range = ytdl_time_range(options)
