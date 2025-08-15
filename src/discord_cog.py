@@ -87,7 +87,7 @@ def timestamp_to_seconds(timestamp: str) -> int:
 def extract_content(
     url: str, options: PlaybackOptions, storage_options: FileStorageOptions | None
 ) -> Attachment:
-    format_str = "b[filesize<8M][vcodec!*=av01]/bv[filesize<6M][vcodec!*=av01]+ba[filesize<2M]/b[vcodec!*=av01]/bv[vcodec!*=av01]+ba/b/bv+ba/bv[vcodec!*=av01]/bv/ba"
+    format_str = "b[filesize<8M]/bv[filesize<6M]+ba[filesize<2M]/b/bv+ba/bv/ba"
 
     with yt_dlp.YoutubeDL(
         params={
