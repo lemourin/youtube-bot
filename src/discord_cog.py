@@ -35,8 +35,6 @@ from src.util import (
     FileStorageOptions,
 )
 
-MAX_SIZE = 10_000_000
-
 
 @dataclasses.dataclass
 class InlineAttachment:
@@ -51,7 +49,7 @@ class Attachment:
     inline_attachment: InlineAttachment | None = None
 
 
-def read(stream: IO[bytes]) -> bytes:
+def read(stream: IO[bytes], filesize_limit: int) -> bytes:
     page_size = 4096
     chunks: list[bytes] = []
     size = 0
@@ -61,7 +59,7 @@ def read(stream: IO[bytes]) -> bytes:
             break
         chunks.append(chunk)
         size += len(chunk)
-        if size > MAX_SIZE:
+        if size > filesize_limit:
             raise discord.ext.commands.CommandError(
                 f"Attachment too large ({size / (2**20)} Mb)!"
             )
@@ -85,17 +83,12 @@ def timestamp_to_seconds(timestamp: str) -> int:
 
 
 def extract_content(
-    url: str, options: PlaybackOptions, storage_options: FileStorageOptions | None
+    url: str,
+    options: PlaybackOptions,
+    filesize_limit: int,
+    storage_options: FileStorageOptions | None,
 ) -> Attachment:
-    format_str = "b[filesize<8M]/bv[filesize<6M]+ba[filesize<2M]/b/bv+ba/bv/ba"
-
-    with yt_dlp.YoutubeDL(
-        params={
-            "format": format_str,
-            "format_sort": ["+size", "+br"],
-            "cookiefile": "cookie.txt",
-        }
-    ) as yt:
+    with yt_dlp.YoutubeDL(params={"cookiefile": "cookie.txt"}) as yt:
         info = yt.extract_info(url, download=False)
         duration_seconds = info.get("duration")
 
@@ -117,9 +110,15 @@ def extract_content(
         raise discord.ext.commands.CommandError("Invalid duration!")
 
     audio_bitrate = 64_000
-    video_bitrate = min(6 * MAX_SIZE / duration_seconds - audio_bitrate, 4_096_000)
+    video_bitrate = min(
+        6 * filesize_limit // duration_seconds - audio_bitrate, 4_096_000
+    )
     if video_bitrate < 64_000:
         raise discord.ext.commands.CommandError("File too big!")
+
+    max_video_size = video_bitrate * duration_seconds // 8
+    max_audio_size = audio_bitrate * duration_seconds // 8
+    format_str = f"b[filesize<{filesize_limit}]/bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b/bv+ba/bv/ba"
 
     time_range = ytdl_time_range(options)
     graph = audio_filter_graph(options)
@@ -197,7 +196,7 @@ def extract_content(
 
         return Attachment(
             title=info["title"],
-            inline_attachment=InlineAttachment(content=read(file), ext="mp4"),
+            inline_attachment=InlineAttachment(content=read(file, filesize_limit), ext="mp4"),
         )
 
 
@@ -644,6 +643,8 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         await interaction.response.defer()
         try:
+            assert interaction.guild
+            filesize_limit = interaction.guild.filesize_limit
             attachment = await asyncio.to_thread(
                 lambda: extract_content(
                     url,
@@ -655,6 +656,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         stop_timestamp=stop_timestamp,
                         volume=min(max(volume, 0), 200) / 100 if volume else None,
                     ),
+                    filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
                 )
             )
