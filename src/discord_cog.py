@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
-from typing import cast, Dict, Any, Tuple, IO
+from typing import cast, Dict, Any, Tuple
+from types import TracebackType
 import io
 import os
 import sys
@@ -38,8 +39,19 @@ from src.util import (
 
 @dataclasses.dataclass
 class InlineAttachment:
-    content: bytes
+    content: io.BufferedIOBase
     ext: str
+
+    def __enter__(self):
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        self.content.close()
 
 
 @dataclasses.dataclass
@@ -48,23 +60,17 @@ class Attachment:
     url: str | None = None
     inline_attachment: InlineAttachment | None = None
 
+    def __enter__(self):
+        return self
 
-def read(stream: IO[bytes], filesize_limit: int) -> bytes:
-    page_size = 4096
-    chunks: list[bytes] = []
-    size = 0
-    while True:
-        chunk = stream.read(page_size)
-        if len(chunk) == 0:
-            break
-        chunks.append(chunk)
-        size += len(chunk)
-        if size > filesize_limit:
-            raise discord.ext.commands.CommandError(
-                f"Attachment too large ({size / (2**20)} Mb)!"
-            )
-    print(f"[ ] attachment size = {size}")
-    return b"".join(chunks)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        if self.inline_attachment is not None:
+            self.inline_attachment.__exit__(exc_type, exc_value, traceback)
 
 
 def timestamp_to_seconds(timestamp: str) -> int:
@@ -130,12 +136,14 @@ def extract_content(
             )
             os.chmod(file.fileno(), mode=0o644)
             return file
-        return tempfile.TemporaryFile()
+        else:
+            return tempfile.TemporaryFile()
 
-    with (
-        subprocess.Popen(
-            args=(
-                [
+    try:
+        file = create_file()
+        with (
+            subprocess.Popen(
+                args=[
                     "yt-dlp",
                     "--cookies",
                     "cookie.txt",
@@ -145,59 +153,61 @@ def extract_content(
                     "-o",
                     "-",
                 ]
-                + (["--download-sections", f"*{time_range}"] if time_range else [])
-            ),
-            stdout=asyncio.subprocess.PIPE,
-        ) as input_data,
-        create_file() as file,
-        subprocess.Popen(
-            args=[
-                "ffmpeg",
-                "-i",
-                "-",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-b:v",
-                f"{video_bitrate}",
-                "-maxrate",
-                f"{video_bitrate}",
-                "-bufsize",
-                "1M",
-                "-c:a",
-                "aac",
-                "-b:a",
-                f"{audio_bitrate}",
-                "-y",
-                "-f",
-                "mp4",
-            ]
-            + (["-af", graph] if graph else [])
-            + [
-                "-fd",
-                f"{file.fileno()}",
-                "fd:",
-            ],
-            stdin=input_data.stdout,
-            stdout=sys.stdout,
-            pass_fds=[file.fileno()],
-        ) as postproc,
-    ):
-        ret_code = postproc.wait()
-        if ret_code != 0:
-            raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
-        file.seek(0)
-        if storage_options:
+                + (["--download-sections", f"*{time_range}"] if time_range else []),
+                stdout=asyncio.subprocess.PIPE,
+            ) as input_data,
+            subprocess.Popen(
+                args=[
+                    "ffmpeg",
+                    "-i",
+                    "-",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-b:v",
+                    f"{video_bitrate}",
+                    "-maxrate",
+                    f"{video_bitrate}",
+                    "-bufsize",
+                    "1M",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    f"{audio_bitrate}",
+                    "-y",
+                    "-f",
+                    "mp4",
+                ]
+                + (["-af", graph] if graph else [])
+                + [
+                    "-fd",
+                    f"{file.fileno()}",
+                    "fd:",
+                ],
+                stdin=input_data.stdout,
+                stdout=sys.stdout,
+                pass_fds=[file.fileno()],
+            ) as postproc,
+        ):
+            ret_code = postproc.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
+            file.seek(0)
+            if storage_options:
+                return Attachment(
+                    title=info["title"],
+                    url=f"{storage_options.url_path}{os.path.basename(file.name)}",
+                )
+
             return Attachment(
                 title=info["title"],
-                url=f"{storage_options.url_path}{os.path.basename(file.name)}",
+                inline_attachment=InlineAttachment(content=file, ext="mp4"),
             )
-
-        return Attachment(
-            title=info["title"],
-            inline_attachment=InlineAttachment(content=read(file, filesize_limit), ext="mp4"),
-        )
+    except Exception:
+        if file:
+            file.close()
+        raise
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -645,7 +655,7 @@ class DiscordCog(discord.ext.commands.Cog):
         try:
             assert interaction.guild
             filesize_limit = interaction.guild.filesize_limit
-            attachment = await asyncio.to_thread(
+            with await asyncio.to_thread(
                 lambda: extract_content(
                     url,
                     options=PlaybackOptions(
@@ -659,19 +669,19 @@ class DiscordCog(discord.ext.commands.Cog):
                     filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
                 )
-            )
-            if attachment.inline_attachment is not None:
-                await interaction.followup.send(
-                    content=f"## {attachment.title}",
-                    file=discord.File(
-                        io.BytesIO(attachment.inline_attachment.content),
-                        filename=f"file.{attachment.inline_attachment.ext}",
-                    ),
-                )
-            elif attachment.url is not None:
-                await interaction.followup.send(content=attachment.url)
-            else:
-                await interaction.followup.send("Failed to extract a video.")
+            ) as attachment:
+                if attachment.inline_attachment is not None:
+                    await interaction.followup.send(
+                        content=f"## {attachment.title}",
+                        file=discord.File(
+                            attachment.inline_attachment.content,
+                            filename=f"file.{attachment.inline_attachment.ext}",
+                        ),
+                    )
+                elif attachment.url is not None:
+                    await interaction.followup.send(content=attachment.url)
+                else:
+                    await interaction.followup.send("Failed to extract a video.")
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
         except yt_dlp.utils.YoutubeDLError:
