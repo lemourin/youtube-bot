@@ -267,81 +267,129 @@ class DiscordCog(discord.ext.commands.Cog):
                 name="yt",
                 description="Play audio of a YouTube video.",
                 callback=self.yt,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="jf",
                 description="Play audio of a video sourced from a Jellyfin server.",
                 callback=self.jf,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="join",
                 description="Add bot to the voice channel.",
                 callback=self.join,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="skip",
                 description="Skip currently playing audio.",
                 callback=self.skip,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="volume",
                 description="Change volume of the currently playing audio.",
                 callback=self.volume,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="stop",
                 description="Pause audio playback.",
                 callback=self.stop,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="leave",
                 description="Disconnect bot from the voice channel.",
                 callback=self.leave,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="die",
                 description="Kill the bot.",
                 callback=self.die,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=True, private_channel=True
+                ),
             ),
             discord.app_commands.Command(
                 name="ping",
                 description="Ping.",
                 callback=self.ping,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=True, private_channel=True
+                ),
             ),
             discord.app_commands.Command(
                 name="queue",
                 description="Show enqueued tracks.",
                 callback=self.queue,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="attach",
                 description="Extract a video out of a url and post an embed with it.",
                 callback=self.attach,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=True, private_channel=True
+                ),
             ),
             discord.app_commands.Command(
                 name="set",
                 description="Alter properties of the currently playing audio.",
                 callback=self.set,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="nightcore",
                 description="Apply nightcore filter to currently playing audio.",
                 callback=self.nightcore,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="bassboost",
                 description="Apply bassboost filter to currently playing audio.",
                 callback=self.bassboost,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="denightcore",
                 description="Negate nightcore filter applied to currently playing audio.",
                 callback=self.denightcore,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
             discord.app_commands.Command(
                 name="debassboost",
                 description="Negate bassboost filter applied to currently playing audio.",
                 callback=self.debassboost,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=False, private_channel=False
+                ),
             ),
         ]:
             bot.tree.add_command(cast(discord.app_commands.Command, command))
@@ -653,8 +701,11 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         await interaction.response.defer()
         try:
-            assert interaction.guild
-            filesize_limit = interaction.guild.filesize_limit
+            filesize_limit = (
+                interaction.guild.filesize_limit
+                if interaction.guild
+                else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
+            )
             with await asyncio.to_thread(
                 lambda: extract_content(
                     url,
@@ -892,7 +943,23 @@ class DiscordCog(discord.ext.commands.Cog):
 
         guild = discord.Object(id=ctx.guild.id)
         self.bot.tree.copy_global_to(guild=guild)
-        await self.bot.tree.sync(guild=guild)
+        commands = await self.bot.tree.sync(guild=guild)
+        await ctx.send(content=f"Synced {len(commands)} commands.")
+
+    @discord.ext.commands.command()
+    async def unsync(self, ctx: discord.ext.commands.Context) -> None:
+        print("[ ] unsync")
+        assert ctx.guild is not None
+
+        guild = discord.Object(id=ctx.guild.id)
+        commands = await self.bot.tree.sync(guild=guild)
+        await ctx.send(content=f"Synced {len(commands)} commands.")
+
+    @discord.ext.commands.command()
+    async def sync_global(self, ctx: discord.ext.commands.Context) -> None:
+        print("[ ] sync_global")
+        commands = await self.bot.tree.sync()
+        await ctx.send(content=f"Synced {len(commands)} commands.")
 
     async def join(self, interaction: discord.Interaction) -> None:
         print("[ ] join")
