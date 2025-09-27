@@ -228,6 +228,9 @@ class GuildState:
                 return await interaction.response.send_message(
                     "Track not enqueued.", ephemeral=True, delete_after=5
                 )
+            await interaction.response.edit_message(
+                view=create_view(enable_play_now=False, enable_skip=False)
+            )
             await self.skip(track.track_id)
             await interaction.response.edit_message(view=create_view(enable_skip=False))
 
@@ -236,6 +239,9 @@ class GuildState:
                 return await interaction.response.send_message(
                     "Already playing.", ephemeral=True, delete_after=5
                 )
+            await interaction.response.edit_message(
+                view=create_view(enable_play_now=False, enable_skip=False)
+            )
             await self.play_now(await self.voice_client(interaction), track)
             await interaction.response.edit_message(
                 view=create_view(enable_play_now=False)
