@@ -152,13 +152,8 @@ def extract_content(
                 "-b:a",
                 f"{audio_bitrate}",
             ]
-        elif extension == "gif":
-            return [
-                "-c:v",
-                "gif",
-                "-pix_fmt",
-                "rgb8",
-            ]
+        elif extension == "webp":
+            return ["-c:v", "webp", "-vf", "scale=320:-2"]
 
     try:
         file = create_file()
@@ -194,11 +189,7 @@ def extract_content(
                 ]
                 + transcode_options()
                 + (["-af", graph] if graph else [])
-                + [
-                    "-fd",
-                    f"{file.fileno()}",
-                    "fd:",
-                ],
+                + ["-fd", f"{file.fileno()}", "fd:"],
                 stdin=input_data.stdout,
                 stdout=sys.stdout,
                 pass_fds=[file.fileno()],
@@ -750,7 +741,7 @@ class DiscordCog(discord.ext.commands.Cog):
             url,
             start_timestamp=start_timestamp,
             stop_timestamp=stop_timestamp,
-            extension="gif",
+            extension="webp",
         )
 
     async def __attach(
