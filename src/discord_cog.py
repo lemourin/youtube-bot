@@ -93,6 +93,7 @@ def extract_content(
     options: PlaybackOptions,
     filesize_limit: int,
     storage_options: FileStorageOptions | None,
+    extension: str = "mp4",
 ) -> Attachment:
     with yt_dlp.YoutubeDL(params={"cookiefile": "cookie.txt"}) as yt:
         info = yt.extract_info(url, download=False)
@@ -132,12 +133,32 @@ def extract_content(
     def create_file():
         if storage_options:
             file = tempfile.NamedTemporaryFile(
-                dir=storage_options.storage_path, suffix=".mp4", delete=False
+                dir=storage_options.storage_path, suffix=f".{extension}", delete=False
             )
             os.chmod(file.fileno(), mode=0o644)
             return file
         else:
             return tempfile.TemporaryFile()
+
+    def transcode_options():
+        if extension == "mp4":
+            return [
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                f"{audio_bitrate}",
+            ]
+        elif extension == "gif":
+            return [
+                "-c:v",
+                "gif",
+                "-pix_fmt",
+                "rgb8",
+            ]
 
     try:
         file = create_file()
@@ -161,24 +182,17 @@ def extract_content(
                     "ffmpeg",
                     "-i",
                     "-",
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
+                    "-f",
+                    extension,
+                    "-y",
                     "-b:v",
                     f"{video_bitrate}",
                     "-maxrate",
                     f"{video_bitrate}",
                     "-bufsize",
                     "1M",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    f"{audio_bitrate}",
-                    "-y",
-                    "-f",
-                    "mp4",
                 ]
+                + transcode_options()
                 + (["-af", graph] if graph else [])
                 + [
                     "-fd",
@@ -202,7 +216,7 @@ def extract_content(
 
             return Attachment(
                 title=info["title"],
-                inline_attachment=InlineAttachment(content=file, ext="mp4"),
+                inline_attachment=InlineAttachment(content=file, ext=extension),
             )
     except Exception:
         if file:
@@ -347,6 +361,14 @@ class DiscordCog(discord.ext.commands.Cog):
                 name="attach",
                 description="Extract a video out of a url and post an embed with it.",
                 callback=self.attach,
+                allowed_contexts=discord.app_commands.AppCommandContext(
+                    guild=True, dm_channel=True, private_channel=True
+                ),
+            ),
+            discord.app_commands.Command(
+                name="attach_gif",
+                description="Extract a video out of a url and post a GIF with it.",
+                callback=self.attach_gif,
                 allowed_contexts=discord.app_commands.AppCommandContext(
                     guild=True, dm_channel=True, private_channel=True
                 ),
@@ -699,6 +721,50 @@ class DiscordCog(discord.ext.commands.Cog):
         stop_timestamp: str | None,
         volume: int | None,
     ) -> None:
+        await self.__attach(
+            interaction,
+            url,
+            nightcore_factor=nightcore_factor,
+            bassboost_factor=bassboost_factor,
+            filter_graph=filter_graph,
+            start_timestamp=start_timestamp,
+            stop_timestamp=stop_timestamp,
+            volume=volume,
+            extension="mp4",
+        )
+
+    @discord.app_commands.describe(
+        url="A url to extract a video from.",
+        start_timestamp=PlaybackOptions.START_TIMESTAMP_DOC,
+        stop_timestamp=PlaybackOptions.STOP_TIMESTAMP_DOC,
+    )
+    async def attach_gif(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        start_timestamp: str | None,
+        stop_timestamp: str | None,
+    ) -> None:
+        await self.__attach(
+            interaction,
+            url,
+            start_timestamp=start_timestamp,
+            stop_timestamp=stop_timestamp,
+            extension="gif",
+        )
+
+    async def __attach(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        nightcore_factor: float | None = None,
+        bassboost_factor: float | None = None,
+        filter_graph: str | None = None,
+        start_timestamp: str | None = None,
+        stop_timestamp: str | None = None,
+        volume: int | None = None,
+        extension: str = "mp4",
+    ) -> None:
         await interaction.response.defer()
         try:
             filesize_limit = (
@@ -719,6 +785,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     ),
                     filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
+                    extension=extension,
                 )
             ) as attachment:
                 if attachment.inline_attachment is not None:
@@ -952,7 +1019,11 @@ class DiscordCog(discord.ext.commands.Cog):
         assert ctx.guild is not None
 
         guild = discord.Object(id=ctx.guild.id)
+        current_commands = self.bot.tree.get_commands(guild=guild)
+        self.bot.tree.clear_commands(guild=guild)
         commands = await self.bot.tree.sync(guild=guild)
+        for command in current_commands:
+            self.bot.tree.add_command(command)
         await ctx.send(content=f"Synced {len(commands)} commands.")
 
     @discord.ext.commands.command()
