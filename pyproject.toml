@@ -11,7 +11,7 @@ dependencies = [
     "aiohttp",
     "discord.py",
     "python-dotenv",
-    "yt-dlp",
+    "yt-dlp[default]",
     "jellyfin-apiclient-python",
     "validators",
     "google-api-python-client",
