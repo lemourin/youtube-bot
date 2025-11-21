@@ -372,8 +372,8 @@ class YTDLQueuedStreamAudio:
 class BufferedAudioSource(discord.AudioSource):
     def __init__(self, source: YTDLQueuedStreamAudio, executor: Executor) -> None:
         self.done = False
-        self.max_chunk_count = 32
-        self.preload_chunk_count = 16
+        self.max_chunk_count = 256
+        self.preload_chunk_count = 128
         self.source = source
         self.executor = executor
         self.chunks: list[AudioChunk] = []
