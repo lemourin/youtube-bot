@@ -9,7 +9,7 @@ import os
 import sys
 import functools
 from urllib.parse import urlparse
-from concurrent.futures import Executor
+from concurrent.futures import Executor, ThreadPoolExecutor
 import subprocess
 import dataclasses
 import aiohttp
@@ -364,6 +364,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
         self.next_track_id = 0
+        self.transcode_executor = ThreadPoolExecutor(max_workers=2)
 
         @bot.event
         async def on_ready() -> None:
@@ -892,7 +893,8 @@ class DiscordCog(discord.ext.commands.Cog):
                 if interaction.guild
                 else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
             )
-            with await asyncio.to_thread(
+            with await asyncio.get_running_loop().run_in_executor(
+                self.transcode_executor,
                 lambda: extract_content(
                     url,
                     options=PlaybackOptions(
