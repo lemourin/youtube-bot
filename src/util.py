@@ -12,8 +12,9 @@ import discord
 
 @dataclasses.dataclass
 class FileStorageOptions:
-    storage_path: str
-    url_path: str
+    storage_path: str | None
+    url_path: str | None
+    tmp_file_path: str
 
 
 @dataclasses.dataclass

@@ -31,6 +31,7 @@ JELLYFIN_USERNAME = os.environ.get("JELLYFIN_USERNAME")
 JELLYFIN_PASSWORD = os.environ.get("JELLYFIN_PASSWORD")
 FILE_STORAGE_PATH = os.environ.get("FILE_STORAGE_PATH")
 FILE_URL_PATH = os.environ.get("FILE_URL_PATH")
+TMP_FILE_PATH = os.environ.get("TMP_FILE_PATH", "./tmp/")
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -85,6 +86,12 @@ async def main() -> None:
             developerKey=YOUTUBE_API_KEY,
         )
 
+    if os.path.isdir(TMP_FILE_PATH):
+        for path in os.scandir(TMP_FILE_PATH):
+            os.remove(path)
+    else:
+        os.mkdir(TMP_FILE_PATH)
+
     async with bot, aiohttp.ClientSession() as http_session:
         with ThreadPoolExecutor(max_workers=32) as executor:
             await bot.add_cog(
@@ -95,12 +102,10 @@ async def main() -> None:
                     discord_admin_id=DISCORD_ADMIN_ID,
                     jellyfin_client=jellyfin_client,
                     youtube_client=youtube_client,
-                    file_storage_options=(
-                        FileStorageOptions(
-                            storage_path=FILE_STORAGE_PATH, url_path=FILE_URL_PATH
-                        )
-                        if FILE_STORAGE_PATH and FILE_URL_PATH
-                        else None
+                    file_storage_options=FileStorageOptions(
+                        storage_path=FILE_STORAGE_PATH,
+                        url_path=FILE_URL_PATH,
+                        tmp_file_path=TMP_FILE_PATH,
                     ),
                 )
             )

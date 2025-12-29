@@ -3,6 +3,8 @@ import tempfile
 from typing import cast, Dict, Any, Tuple
 from types import TracebackType
 import io
+import uuid
+import pathlib
 import os
 import sys
 import functools
@@ -92,12 +94,13 @@ def extract_content(
     url: str,
     options: PlaybackOptions,
     filesize_limit: int,
-    storage_options: FileStorageOptions | None,
+    storage_options: FileStorageOptions,
     extension: str = "mp4",
 ) -> Attachment:
     with yt_dlp.YoutubeDL(params={"cookiefile": "cookie.txt"}) as yt:
         info = yt.extract_info(url, download=False)
         duration_seconds = info.get("duration")
+        title = info.get("title") or "No title."
 
     if not duration_seconds:
         raise discord.ext.commands.CommandError("Duration unknown!")
@@ -130,8 +133,10 @@ def extract_content(
     time_range = ytdl_time_range(options)
     graph = audio_filter_graph(options)
 
+    pass_log_file = pathlib.Path(storage_options.tmp_file_path) / f"{uuid.uuid4()}.log"
+
     def create_file():
-        if storage_options:
+        if storage_options.storage_path:
             file = tempfile.NamedTemporaryFile(
                 dir=storage_options.storage_path, suffix=f".{extension}", delete=False
             )
@@ -140,79 +145,165 @@ def extract_content(
         else:
             return tempfile.TemporaryFile()
 
-    def transcode_options():
-        if extension == "mp4":
-            return [
+    def transcode_h265_pass_1(input_fd: int):
+        with subprocess.Popen(
+            args=[
+                "ffmpeg",
+                "-fd",
+                f"{input_fd}",
+                "-i",
+                "fd:",
+                "-f",
+                "mp4",
+                "-y",
+                "-b:v",
+                f"{video_bitrate}",
                 "-c:v",
-                "libx264",
+                "libx265",
                 "-pix_fmt",
                 "yuv420p",
+                "-tag:v",
+                "hvc1",
+                "-x265-params",
+                f"stats={pass_log_file}:pass=1",
+                "-an",
+                "-f",
+                "null",
+                f"{"NUL" if os.name == "nt" else "/dev/null"}",
+            ],
+            stdout=sys.stdout,
+            pass_fds=[input_fd],
+        ) as proc:
+            ret_code = proc.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {ret_code} on encode pass 1"
+                )
+
+    def transcode_h265_pass_2(input_fd: int, output_fd: int):
+        with subprocess.Popen(
+            args=[
+                "ffmpeg",
+                "-fd",
+                f"{input_fd}",
+                "-i",
+                "fd:",
+                "-f",
+                "mp4",
+                "-y",
+                "-b:v",
+                f"{video_bitrate}",
+                "-c:v",
+                "libx265",
+                "-pix_fmt",
+                "yuv420p",
+                "-tag:v",
+                "hvc1",
                 "-c:a",
                 "aac",
                 "-b:a",
                 f"{audio_bitrate}",
+                "-x265-params",
+                f"stats={pass_log_file}:pass=2",
             ]
-        elif extension == "webp":
-            return ["-c:v", "webp", "-vf", "scale=320:-2"]
-
-    try:
-        file = create_file()
-        with (
-            subprocess.Popen(
-                args=[
-                    "yt-dlp",
-                    "--cookies",
-                    "cookie.txt",
-                    url,
-                    "-f",
-                    format_str,
-                    "-o",
-                    "-",
-                ]
-                + (["--download-sections", f"*{time_range}"] if time_range else []),
-                stdout=asyncio.subprocess.PIPE,
-            ) as input_data,
-            subprocess.Popen(
-                args=[
-                    "ffmpeg",
-                    "-i",
-                    "-",
-                    "-f",
-                    extension,
-                    "-y",
-                    "-b:v",
-                    f"{video_bitrate}",
-                    "-maxrate",
-                    f"{video_bitrate}",
-                    "-bufsize",
-                    "1M",
-                ]
-                + transcode_options()
-                + (["-af", graph] if graph else [])
-                + ["-fd", f"{file.fileno()}", "fd:"],
-                stdin=input_data.stdout,
-                stdout=sys.stdout,
-                pass_fds=[file.fileno()],
-            ) as postproc,
-        ):
-            ret_code = postproc.wait()
+            + (["-af", graph] if graph else [])
+            + ["-fd", f"{output_fd}", "fd:"],
+            stdout=sys.stdout,
+            pass_fds=[input_fd, output_fd],
+        ) as proc:
+            ret_code = proc.wait()
             if ret_code != 0:
-                raise discord.ext.commands.CommandError(f"ffmpeg error {ret_code}")
-            file.seek(0)
-            if storage_options:
-                return Attachment(
-                    title=info["title"],
-                    url=f"{storage_options.url_path}{os.path.basename(file.name)}",
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {ret_code} on transcode"
                 )
 
-            return Attachment(
-                title=info["title"],
-                inline_attachment=InlineAttachment(content=file, ext=extension),
+    def transcode_webp(input_fd: int, output_fd: int):
+        with subprocess.Popen(
+            args=[
+                "ffmpeg",
+                "-fd",
+                f"{input_fd}",
+                "-i",
+                "fd:",
+                "-f",
+                "webp",
+                "-y",
+                "-b:v",
+                f"{video_bitrate}",
+                "-c:v",
+                "webp",
+                "-vf",
+                "scale=320:-2",
+                "-an",
+            ]
+            + ["-fd", f"{output_fd}", "fd:"],
+            stdout=sys.stdout,
+            pass_fds=[input_fd, output_fd],
+        ) as proc:
+            ret_code = proc.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {ret_code} on transcode"
+                )
+
+    input_file = None
+    output_file = None
+    try:
+        input_file = tempfile.TemporaryFile()
+        with subprocess.Popen(
+            args=[
+                "yt-dlp",
+                "--cookies",
+                "cookie.txt",
+                url,
+                "-f",
+                format_str,
+                "-o",
+                "-",
+            ]
+            + (["--download-sections", f"*{time_range}"] if time_range else []),
+            stdout=input_file,
+        ) as process:
+            ret_code = process.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(f"yt-dlp error {ret_code}")
+
+        if extension == "mp4":
+            input_file.seek(0)
+            transcode_h265_pass_1(input_fd=input_file.fileno())
+
+            input_file.seek(0)
+            output_file = create_file()
+            transcode_h265_pass_2(
+                input_fd=input_file.fileno(), output_fd=output_file.fileno()
             )
-    except Exception:
-        if file:
-            file.close()
+        else:  # webp
+            input_file.seek(0)
+            output_file = create_file()
+            transcode_webp(input_fd=input_file.fileno(), output_fd=output_file.fileno())
+
+        output_file.seek(0)
+        if storage_options.url_path:
+            return Attachment(
+                title=title,
+                url=f"{storage_options.url_path}{os.path.basename(output_file.name)}",
+            )
+        else:
+            return Attachment(
+                title=title,
+                inline_attachment=InlineAttachment(content=output_file, ext=extension),
+            )
+    except:
+        if output_file:
+            output_file.close()
         raise
+    finally:
+        for path in os.scandir(storage_options.tmp_file_path):
+            if path.path.startswith(str(pass_log_file)):
+                os.remove(path)
+
+        if input_file:
+            input_file.close()
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -222,18 +313,18 @@ class DiscordCog(discord.ext.commands.Cog):
         executor: Executor,
         http: aiohttp.ClientSession,
         discord_admin_id: int,
+        file_storage_options: FileStorageOptions,
         jellyfin_client: JellyfinLibraryClient | None = None,
         youtube_client: Any = None,
-        file_storage_options: FileStorageOptions | None = None,
     ) -> None:
         self.bot = bot
         self.executor = executor
         self.http = http
         self.discord_admin_id = discord_admin_id
+        self.file_storage_options = file_storage_options
         self.state: Dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
-        self.file_storage_options = file_storage_options
         self.next_track_id = 0
 
         @bot.event
