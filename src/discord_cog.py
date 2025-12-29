@@ -123,7 +123,7 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
             "-tag:v",
             "hvc1",
             "-x265-params",
-            f"stats={pass_log_file}:pass=1",
+            f"stats={pass_log_file}:pass=1:frame-threads=1:pools=2",
             "-an",
             "-f",
             "null",
@@ -172,7 +172,7 @@ def _transcode_h265_pass_2(
             "-b:a",
             f"{audio_bitrate}",
             "-x265-params",
-            f"stats={pass_log_file}:pass=2",
+            f"stats={pass_log_file}:pass=2:frame-threads=1:pools=2",
         ]
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
