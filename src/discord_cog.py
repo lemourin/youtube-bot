@@ -102,6 +102,109 @@ def _create_file(storage_path: str | None, extension: str):
         return tempfile.TemporaryFile()
 
 
+def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int):
+    with subprocess.Popen(
+        args=[
+            "ffmpeg",
+            "-fd",
+            f"{input_fd}",
+            "-i",
+            "fd:",
+            "-f",
+            "mp4",
+            "-y",
+            "-threads",
+            "2",
+            "-passlogfile",
+            pass_log_file,
+            "-pass",
+            "1",
+            "-b:v",
+            f"{video_bitrate}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            "-f",
+            "null",
+            f"{"NUL" if os.name == "nt" else "/dev/null"}",
+        ],
+        stdout=sys.stdout,
+        pass_fds=[input_fd],
+    ) as proc:
+        try:
+            proc.wait(timeout=300)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on encode pass 1"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(
+                f"ffmpeg encode pass 1 deadline exceeded"
+            )
+
+
+def _transcode_h264_pass_2(
+    input_fd: int,
+    output_fd: int,
+    pass_log_file: str,
+    video_bitrate: int,
+    audio_bitrate: int,
+    graph: str | None,
+):
+    with subprocess.Popen(
+        args=[
+            "ffmpeg",
+            "-fd",
+            f"{input_fd}",
+            "-i",
+            "fd:",
+            "-f",
+            "mp4",
+            "-y",
+            "-threads",
+            "2",
+            "-passlogfile",
+            pass_log_file,
+            "-pass",
+            "2",
+            "-b:v",
+            f"{video_bitrate}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            f"{audio_bitrate}",
+        ]
+        + (["-af", graph] if graph else [])
+        + ["-fd", f"{output_fd}", "fd:"],
+        stdout=sys.stdout,
+        pass_fds=[input_fd, output_fd],
+    ) as proc:
+        try:
+            proc.wait(timeout=450)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on transcode"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(
+                f"ffmpeg encode pass 2 deadline exceeded"
+            )
+
+
 def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int):
     with subprocess.Popen(
         args=[
@@ -280,6 +383,7 @@ def extract_content(
     filesize_limit: int,
     storage_options: FileStorageOptions,
     extension: str = "mp4",
+    video_codec: str = "h265",
 ) -> Attachment:
     input_uuid = uuid.uuid4()
     pass_log_file = str(
@@ -321,12 +425,23 @@ def extract_content(
         input_file = open(input_filename)
 
         if extension == "mp4":
+            transcode_pass_1 = (
+                _transcode_h265_pass_1
+                if (video_codec == "h265")
+                else _transcode_h264_pass_1
+            )
+            transcode_pass_2 = (
+                _transcode_h265_pass_2
+                if (video_codec == "h265")
+                else _transcode_h264_pass_2
+            )
+
             input_file.seek(0)
-            _transcode_h265_pass_1(input_file.fileno(), pass_log_file, video_bitrate)
+            transcode_pass_1(input_file.fileno(), pass_log_file, video_bitrate)
 
             input_file.seek(0)
             output_file = _create_file(storage_options.storage_path, extension)
-            _transcode_h265_pass_2(
+            transcode_pass_2(
                 input_fd=input_file.fileno(),
                 output_fd=output_file.fileno(),
                 pass_log_file=pass_log_file,
@@ -853,6 +968,7 @@ class DiscordCog(discord.ext.commands.Cog):
         start_timestamp=PlaybackOptions.START_TIMESTAMP_DOC,
         stop_timestamp=PlaybackOptions.STOP_TIMESTAMP_DOC,
         volume=PlaybackOptions.VOLUME_DOC,
+        video_codec="Video codec to be used. Use h264 for quick transcode, h265 for high quality.",
     )
     async def attach(
         self,
@@ -864,6 +980,7 @@ class DiscordCog(discord.ext.commands.Cog):
         start_timestamp: str | None,
         stop_timestamp: str | None,
         volume: int | None,
+        video_codec: str | None,
     ) -> None:
         await self.__attach(
             interaction,
@@ -875,6 +992,7 @@ class DiscordCog(discord.ext.commands.Cog):
             stop_timestamp=stop_timestamp,
             volume=volume,
             extension="mp4",
+            video_codec=video_codec if video_codec else "h265",
         )
 
     @discord.app_commands.describe(
@@ -895,6 +1013,7 @@ class DiscordCog(discord.ext.commands.Cog):
             start_timestamp=start_timestamp,
             stop_timestamp=stop_timestamp,
             extension="webp",
+            video_codec="webp",
         )
 
     async def __attach(
@@ -908,9 +1027,15 @@ class DiscordCog(discord.ext.commands.Cog):
         stop_timestamp: str | None = None,
         volume: int | None = None,
         extension: str = "mp4",
+        video_codec: str = "h265",
     ) -> None:
         await interaction.response.defer()
         try:
+            if extension == "mp4" and video_codec not in ["h264", "h265"]:
+                raise discord.ext.commands.CommandError("Video codec not supported.")
+            elif extension == "webp" and video_codec not in ["webp"]:
+                raise discord.ext.commands.CommandError("Video codec not supported.")
+
             filesize_limit = (
                 interaction.guild.filesize_limit
                 if interaction.guild
@@ -931,6 +1056,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
                     extension=extension,
+                    video_codec=video_codec,
                 ),
             ) as attachment:
                 if attachment.inline_attachment is not None:
