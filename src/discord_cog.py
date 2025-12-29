@@ -121,14 +121,12 @@ def extract_content(
 
     audio_bitrate = 64_000
     video_bitrate = min(
-        6 * filesize_limit // duration_seconds - audio_bitrate, 4_096_000
+        8 * filesize_limit // duration_seconds - audio_bitrate, 4_096_000
     )
     if video_bitrate < 64_000:
         raise discord.ext.commands.CommandError("File too big!")
 
-    max_video_size = video_bitrate * duration_seconds // 8
-    max_audio_size = audio_bitrate * duration_seconds // 8
-    format_str = f"b[filesize<{filesize_limit}]/bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b/bv+ba/bv/ba"
+    format_str = f"bv+ba/b/bv/ba"
 
     time_range = ytdl_time_range(options)
     graph = audio_filter_graph(options)
@@ -160,6 +158,8 @@ def extract_content(
                 f"{video_bitrate}",
                 "-c:v",
                 "libx265",
+                "-preset",
+                "ultrafast",
                 "-pix_fmt",
                 "yuv420p",
                 "-tag:v",
@@ -195,6 +195,8 @@ def extract_content(
                 f"{video_bitrate}",
                 "-c:v",
                 "libx265",
+                "-preset",
+                "ultrafast",
                 "-pix_fmt",
                 "yuv420p",
                 "-tag:v",
