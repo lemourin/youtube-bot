@@ -126,8 +126,6 @@ def extract_content(
     if video_bitrate < 64_000:
         raise discord.ext.commands.CommandError("File too big!")
 
-    format_str = f"bv+ba/b/bv/ba"
-
     time_range = ytdl_time_range(options)
     graph = audio_filter_graph(options)
 
@@ -142,6 +140,25 @@ def extract_content(
             return file
         else:
             return tempfile.TemporaryFile()
+
+    def fetch_input(input_file):
+        with subprocess.Popen(
+            args=[
+                "yt-dlp",
+                "--cookies",
+                "cookie.txt",
+                url,
+                "-f",
+                "bv+ba/b/bv/ba",
+                "-o",
+                "-",
+            ]
+            + (["--download-sections", f"*{time_range}"] if time_range else []),
+            stdout=input_file,
+        ) as process:
+            ret_code = process.wait()
+            if ret_code != 0:
+                raise discord.ext.commands.CommandError(f"yt-dlp error {ret_code}")
 
     def transcode_h265_pass_1(input_fd: int):
         with subprocess.Popen(
@@ -252,23 +269,7 @@ def extract_content(
     output_file = None
     try:
         input_file = tempfile.TemporaryFile()
-        with subprocess.Popen(
-            args=[
-                "yt-dlp",
-                "--cookies",
-                "cookie.txt",
-                url,
-                "-f",
-                format_str,
-                "-o",
-                "-",
-            ]
-            + (["--download-sections", f"*{time_range}"] if time_range else []),
-            stdout=input_file,
-        ) as process:
-            ret_code = process.wait()
-            if ret_code != 0:
-                raise discord.ext.commands.CommandError(f"yt-dlp error {ret_code}")
+        fetch_input(input_file)
 
         if extension == "mp4":
             input_file.seek(0)
