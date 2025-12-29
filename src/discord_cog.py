@@ -7,6 +7,7 @@ import uuid
 import pathlib
 import os
 import sys
+import json
 import functools
 from urllib.parse import urlparse
 from concurrent.futures import Executor, ThreadPoolExecutor
@@ -16,7 +17,6 @@ import aiohttp
 import discord
 import discord.ext.commands
 import validators
-import yt_dlp  # type: ignore
 from linkpreview import link_preview  # type: ignore
 from src.audio import YTDLSource, AudioTrack
 from src.guild_state import GuildState
@@ -132,7 +132,7 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
         stdout=sys.stdout,
         pass_fds=[input_fd],
     ) as proc:
-        ret_code = proc.wait()
+        ret_code = proc.wait(timeout=300)
         if ret_code != 0:
             raise discord.ext.commands.CommandError(
                 f"ffmpeg error {ret_code} on encode pass 1"
@@ -179,7 +179,7 @@ def _transcode_h265_pass_2(
         stdout=sys.stdout,
         pass_fds=[input_fd, output_fd],
     ) as proc:
-        ret_code = proc.wait()
+        ret_code = proc.wait(timeout=450)
         if ret_code != 0:
             raise discord.ext.commands.CommandError(
                 f"ffmpeg error {ret_code} on transcode"
@@ -209,28 +209,45 @@ def _transcode_webp(input_fd: int, output_fd: int, video_bitrate: int):
         stdout=sys.stdout,
         pass_fds=[input_fd, output_fd],
     ) as proc:
-        ret_code = proc.wait()
+        ret_code = proc.wait(timeout=600)
         if ret_code != 0:
             raise discord.ext.commands.CommandError(
                 f"ffmpeg error {ret_code} on transcode"
             )
 
 
-def _download_ranges(options: PlaybackOptions) -> list[dict]:
-    return [
-        {
-            "start_time": (
-                timestamp_to_seconds(options.start_timestamp)
-                if options.start_timestamp
-                else 0
-            ),
-            "end_time": (
-                timestamp_to_seconds(options.stop_timestamp)
-                if options.stop_timestamp
-                else float("inf")
-            ),
-        }
-    ]
+def _yt_dlp_fetch(
+    url: str, options: PlaybackOptions, storage_options: FileStorageOptions, uuid: str
+):
+    max_video_size = 128 * 1024 * 1024
+    max_audio_size = 64 * 1024 * 1924
+    format_str = f"bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b[filesize<{max_video_size + max_audio_size}]/bv[filesize<{max_video_size}]/ba[filesize<{max_audio_size}]/bv+ba/b/bv/ba"
+    time_range = ytdl_time_range(options)
+    result = subprocess.run(
+        [
+            "yt-dlp",
+            "--cookies",
+            "cookie.txt",
+            "-f",
+            format_str,
+            "--max-filesize",
+            f"{max_video_size + max_audio_size}",
+            "-j",
+            "--no-simulate",
+            "-o",
+            f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}.%(ext)s",
+            url,
+        ]
+        + (["--download-sections", f"*{time_range}"] if time_range else []),
+        timeout=120,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"yt-dlp error: {result.stderr}", file=sys.stderr)
+        raise discord.ext.commands.CommandError(f"yt-dlp error {result.returncode}")
+
+    return json.loads(result.stdout)
 
 
 def extract_content(
@@ -240,36 +257,18 @@ def extract_content(
     storage_options: FileStorageOptions,
     extension: str = "mp4",
 ) -> Attachment:
-    max_video_size = 128 * 1024 * 1024
-    max_audio_size = 64 * 1024 * 1924
-    format_str = f"bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b[filesize<{max_video_size + max_audio_size}]/bv[filesize<{max_video_size}]/ba[filesize<{max_audio_size}]/bv+ba/b/bv/ba"
-
     input_uuid = uuid.uuid4()
     pass_log_file = str(
         pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
     )
 
-    yt_dlp_params = {
-        "cookiefile": "cookie.txt",
-        "format": format_str,
-        "outtmpl": {
-            "default": f"{pathlib.Path(storage_options.tmp_file_path) / str(input_uuid)}.%(ext)s"
-        },
-        "max_filesize": max_video_size + max_audio_size,
-    }
-    if options.start_timestamp or options.stop_timestamp:
-        yt_dlp_params["download_ranges"] = lambda info_dict, ydl: _download_ranges(
-            options
-        )
-
     input_file = None
     output_file = None
     try:
-        with yt_dlp.YoutubeDL(params=yt_dlp_params) as yt:
-            info = yt.extract_info(url, download=True)
-            input_filename = f"{pathlib.Path(storage_options.tmp_file_path) / str(input_uuid)}.{info["ext"]}"
-            duration_seconds = info.get("duration")
-            title = info.get("title") or "No title."
+        yt_dlp_info = _yt_dlp_fetch(url, options, storage_options, str(input_uuid))
+        input_filename = f"{pathlib.Path(storage_options.tmp_file_path) / str(input_uuid)}.{yt_dlp_info["ext"]}"
+        duration_seconds = yt_dlp_info.get("duration")
+        title = yt_dlp_info.get("title") or "No title."
 
         if not duration_seconds:
             raise discord.ext.commands.CommandError("Duration unknown!")
@@ -908,7 +907,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
                     extension=extension,
-                )
+                ),
             ) as attachment:
                 if attachment.inline_attachment is not None:
                     await interaction.followup.send(
@@ -924,8 +923,6 @@ class DiscordCog(discord.ext.commands.Cog):
                     await interaction.followup.send("Failed to extract a video.")
         except discord.ext.commands.CommandError as e:
             await interaction.followup.send(e.args[0])
-        except yt_dlp.utils.YoutubeDLError:
-            await interaction.followup.send("Failed to extract a video.")
 
     async def __authorize_options(
         self, interaction: discord.Interaction, filter_graph: str | None
