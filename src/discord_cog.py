@@ -129,13 +129,19 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
             "null",
             f"{"NUL" if os.name == "nt" else "/dev/null"}",
         ],
-        stdout=sys.stdout,
         pass_fds=[input_fd],
     ) as proc:
-        ret_code = proc.wait(timeout=300)
-        if ret_code != 0:
+        try:
+            proc.wait(timeout=300)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on encode pass 1"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
             raise discord.ext.commands.CommandError(
-                f"ffmpeg error {ret_code} on encode pass 1"
+                f"ffmpeg encode pass 1 deadline exceeded"
             )
 
 
@@ -176,13 +182,19 @@ def _transcode_h265_pass_2(
         ]
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
-        stdout=sys.stdout,
         pass_fds=[input_fd, output_fd],
     ) as proc:
-        ret_code = proc.wait(timeout=450)
-        if ret_code != 0:
+        try:
+            proc.wait(timeout=450)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on transcode"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
             raise discord.ext.commands.CommandError(
-                f"ffmpeg error {ret_code} on transcode"
+                f"ffmpeg encode pass 2 deadline exceeded"
             )
 
 
@@ -206,13 +218,19 @@ def _transcode_webp(input_fd: int, output_fd: int, video_bitrate: int):
             "-an",
         ]
         + ["-fd", f"{output_fd}", "fd:"],
-        stdout=sys.stdout,
         pass_fds=[input_fd, output_fd],
     ) as proc:
-        ret_code = proc.wait(timeout=600)
-        if ret_code != 0:
+        try:
+            proc.wait(timeout=600)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on transcode"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
             raise discord.ext.commands.CommandError(
-                f"ffmpeg error {ret_code} on transcode"
+                f"ffmpeg webp transcode deadline exceeded"
             )
 
 
@@ -223,8 +241,8 @@ def _yt_dlp_fetch(
     max_audio_size = 64 * 1024 * 1924
     format_str = f"bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b[filesize<{max_video_size + max_audio_size}]/bv[filesize<{max_video_size}]/ba[filesize<{max_audio_size}]/bv+ba/b/bv/ba"
     time_range = ytdl_time_range(options)
-    result = subprocess.run(
-        [
+    with subprocess.Popen(
+        args=[
             "yt-dlp",
             "--cookies",
             "cookie.txt",
@@ -239,15 +257,20 @@ def _yt_dlp_fetch(
             url,
         ]
         + (["--download-sections", f"*{time_range}"] if time_range else []),
-        timeout=120,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
-    )
-    if result.returncode != 0:
-        print(f"yt-dlp error: {result.stderr}", file=sys.stderr)
-        raise discord.ext.commands.CommandError(f"yt-dlp error {result.returncode}")
-
-    return json.loads(result.stdout)
+    ) as proc:
+        try:
+            [stdout, _] = proc.communicate(timeout=120)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"yt-dlp error {proc.returncode}"
+                )
+            return json.loads(stdout)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(f"yt-dlp fetch deadline exceeded")
 
 
 def extract_content(
