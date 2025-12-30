@@ -189,7 +189,7 @@ async def _invoke(callbacks: Sequence[Callable[[], None] | Awaitable[None]]):
 
     def f():
         for i in sync_funcs:
-            i()
+            i()  # type: ignore
 
     await asyncio.gather(asyncio.to_thread(f), *async_funcs)
 

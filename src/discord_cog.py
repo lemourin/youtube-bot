@@ -14,6 +14,7 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 import subprocess
 import dataclasses
 import aiohttp
+import aiohttp.web
 import discord
 import discord.ext.commands
 import validators
@@ -351,7 +352,7 @@ def extract_content(
         else:
             return Attachment(
                 title=title,
-                inline_attachment=InlineAttachment(content=output_file, ext=extension),
+                inline_attachment=InlineAttachment(content=output_file, ext=extension),  # type: ignore
             )
     except:
         if output_file:
@@ -587,10 +588,10 @@ class DiscordCog(discord.ext.commands.Cog):
                 async with self.http.get(url) as data:
                     if data.content_type != "text/html":
                         return None
-                    preview = await asyncio.to_thread(
+                    preview: Any = await asyncio.to_thread(
                         link_preview,
                         url=url,
-                        content=await read_at_most(data.content, 1024 * 1024),
+                        content=str(await read_at_most(data.content, 1024 * 1024)),
                     )
                     return MessageContent(
                         title=preview.title,
@@ -1108,9 +1109,10 @@ class DiscordCog(discord.ext.commands.Cog):
 
         async def on_reject(button_interaction: discord.Interaction):
             if interaction.user.id != button_interaction.user.id:
-                return await button_interaction.response.send_message(
+                await button_interaction.response.send_message(
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
+                return
             await button_interaction.response.defer()
             await interaction.delete_original_response()
 

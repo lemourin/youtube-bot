@@ -225,9 +225,10 @@ class GuildState:
 
         async def on_skip(interaction: discord.Interaction):
             if not await self.is_skippable(track.track_id):
-                return await interaction.response.send_message(
+                await interaction.response.send_message(
                     "Track not enqueued.", ephemeral=True, delete_after=5
                 )
+                return
             await interaction.response.edit_message(
                 view=create_view(enable_play_now=False, enable_skip=False)
             )
@@ -236,9 +237,10 @@ class GuildState:
 
         async def on_play_now(interaction: discord.Interaction):
             if await self.current_track_id() == track.track_id:
-                return await interaction.response.send_message(
+                await interaction.response.send_message(
                     "Already playing.", ephemeral=True, delete_after=5
                 )
+                return
             await interaction.response.edit_message(
                 view=create_view(enable_play_now=False, enable_skip=False)
             )

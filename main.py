@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import aiohttp
+import aiohttp.web
 import discord
 import discord.ext.commands
 from dotenv import load_dotenv
@@ -41,7 +42,7 @@ async def healthcheck(http: aiohttp.ClientSession) -> None:
         try:
             async with http.get(HEALTHCHECK_ADDRESS) as response:
                 await response.text()
-        except aiohttp.web_exceptions.HTTPException as e:
+        except aiohttp.web.HTTPException as e:
             print(f"[ ] health check error {e}")
         await asyncio.sleep(60)
 
