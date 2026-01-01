@@ -103,7 +103,7 @@ def _create_file(storage_path: str | None, extension: str):
         return tempfile.TemporaryFile()
 
 
-def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int):
+def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
@@ -119,7 +119,7 @@ def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
             "-pass",
             "1",
             "-b:v",
-            f"{video_bitrate}",
+            f"{bitrate_v}",
             "-c:v",
             "libx264",
             "-preset",
@@ -156,8 +156,8 @@ def _transcode_h264_pass_2(
     input_fds: list[int],
     output_fd: int,
     pass_log_file: str,
-    video_bitrate: int,
-    audio_bitrate: int,
+    bitrate_v: int,
+    bitrate_a: int,
     graph: str | None,
 ):
     with subprocess.Popen(
@@ -174,7 +174,7 @@ def _transcode_h264_pass_2(
             "-pass",
             "2",
             "-b:v",
-            f"{video_bitrate}",
+            f"{bitrate_v}",
             "-c:v",
             "libx264",
             "-preset",
@@ -188,7 +188,7 @@ def _transcode_h264_pass_2(
             "-c:a",
             "aac",
             "-b:a",
-            f"{audio_bitrate}",
+            f"{bitrate_a}",
         ]
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
@@ -209,7 +209,7 @@ def _transcode_h264_pass_2(
             )
 
 
-def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int):
+def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
@@ -221,7 +221,7 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
             "mp4",
             "-y",
             "-b:v",
-            f"{video_bitrate}",
+            f"{bitrate_v}",
             "-c:v",
             "libx265",
             "-preset",
@@ -257,8 +257,8 @@ def _transcode_h265_pass_2(
     input_fds: list[int],
     output_fd: int,
     pass_log_file: str,
-    video_bitrate: int,
-    audio_bitrate: int,
+    bitrate_v: int,
+    bitrate_a: int,
     graph: str | None,
 ):
     with subprocess.Popen(
@@ -269,7 +269,7 @@ def _transcode_h265_pass_2(
             "mp4",
             "-y",
             "-b:v",
-            f"{video_bitrate}",
+            f"{bitrate_v}",
             "-c:v",
             "libx265",
             "-preset",
@@ -281,7 +281,7 @@ def _transcode_h265_pass_2(
             "-c:a",
             "aac",
             "-b:a",
-            f"{audio_bitrate}",
+            f"{bitrate_a}",
             "-x265-params",
             f"stats={pass_log_file}:pass=2:frame-threads=2:pools=4",
         ]
@@ -303,7 +303,7 @@ def _transcode_h265_pass_2(
             )
 
 
-def _transcode_webp(input_fd: int, output_fd: int, video_bitrate: int):
+def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
@@ -315,7 +315,7 @@ def _transcode_webp(input_fd: int, output_fd: int, video_bitrate: int):
             "webp",
             "-y",
             "-b:v",
-            f"{video_bitrate}",
+            f"{bitrate_v}",
             "-c:v",
             "webp",
             "-vf",
@@ -368,6 +368,8 @@ class FetchResult:
     input_codec_v: str
     input_filename_v: str
     input_filename_a: str | None
+    input_bitrate_v: int
+    input_bitrate_a: int
     duration_seconds: int
 
 
@@ -385,17 +387,27 @@ def _yt_dlp_fetch(
     format_str = "/".join(
         [
             f"bv[filesize<{max_video_size}][{supported_vcodec}],ba[filesize<{max_audio_dl_size}]",
+            f"bv[filesize_approx<{max_video_size}][{supported_vcodec}],ba[filesize_approx<{max_audio_dl_size}]",
             f"b[filesize<{max_video_size}][{supported_vcodec}]",
-            f"bv[{supported_vcodec}],ba",
-            f"b[{supported_vcodec}]",
+            f"b[filesize_approx<{max_video_size}][{supported_vcodec}]",
             f"bv[filesize<{max_video_dl_size}],ba[filesize<{max_audio_dl_size}]",
+            f"bv[filesize_approx<{max_video_dl_size}],ba[filesize_approx<{max_audio_dl_size}]",
             f"b[filesize<{max_video_dl_size + max_audio_dl_size}]",
-            "bv,ba",
-            "b",
+            f"b[filesize_approx<{max_video_dl_size + max_audio_dl_size}]",
+            f"wv[{supported_vcodec}],wa",
+            f"w[{supported_vcodec}]",
+            "wv,wa",
+            "w",
+            f"bv[filesize<{max_video_size}][{supported_vcodec}]",
+            f"bv[filesize_approx<{max_video_size}][{supported_vcodec}]",
+            f"bv[filesize<{max_video_dl_size}][{supported_vcodec}]",
+            f"bv[filesize_approx<{max_video_dl_size}][{supported_vcodec}]",
             f"bv[filesize<{max_video_dl_size}]",
+            f"bv[filesize_approx<{max_video_dl_size}]",
             f"ba[filesize<{max_audio_dl_size}]",
-            "bv",
-            "ba",
+            f"ba[filesize_approx<{max_audio_dl_size}]",
+            "wv",
+            "wa",
         ]
     )
     time_range = ytdl_time_range(options)
@@ -429,25 +441,38 @@ def _yt_dlp_fetch(
             input_codec_v = None
             input_filename_v = None
             input_filename_a = None
+            input_bitrate_v = None
+            input_bitrate_a = None
             for d in yt_dlp_info["requested_downloads"]:
                 if input_filename_v is None and d["vcodec"] != "none":
                     input_filename_v = d["filepath"]
                     input_codec_v = d["vcodec"]
+                    if d["acodec"] != "none":
+                        input_bitrate_v = d["tbr"]
+                        input_bitrate_a = 0
+                    else:
+                        input_bitrate_v = d["vbr"]
                 elif (
                     input_filename_a is None
+                    and input_bitrate_a is None
                     and d["vcodec"] == "none"
                     and d["acodec"] != "none"
                 ):
                     input_filename_a = d["filepath"]
+                    input_bitrate_a = d["abr"]
 
-            if not (input_codec_v and input_filename_v):
+            if not (input_codec_v and input_filename_v and input_bitrate_v):
                 raise discord.ext.commands.CommandError("Video source not found!")
+            if input_bitrate_a is None:
+                raise discord.ext.commands.CommandError("No audio found!")
 
             return FetchResult(
                 title=yt_dlp_info.get("title") or "No title.",
                 input_codec_v=input_codec_v,
                 input_filename_v=input_filename_v,
                 input_filename_a=input_filename_a,
+                input_bitrate_v=input_bitrate_v,
+                input_bitrate_a=input_bitrate_a,
                 duration_seconds=_content_duration_seconds(
                     yt_dlp_info.get("duration"), options
                 ),
@@ -463,8 +488,8 @@ def _two_pass_transcode(
     video_codec: str,
     options: PlaybackOptions,
     pass_log_file: str,
-    video_bitrate: int,
-    audio_bitrate: int,
+    bitrate_v: int,
+    bitrate_a: int,
     video_fd: int,
     audio_fd: int | None,
     output_fd: int,
@@ -475,14 +500,14 @@ def _two_pass_transcode(
     transcode_pass_2 = (
         _transcode_h265_pass_2 if (video_codec == "h265") else _transcode_h264_pass_2
     )
-    transcode_pass_1(video_fd, pass_log_file, video_bitrate)
+    transcode_pass_1(video_fd, pass_log_file, bitrate_v)
     os.lseek(video_fd, 0, os.SEEK_SET)
     transcode_pass_2(
         input_fds=[video_fd] + [audio_fd] if audio_fd is not None else [],
         output_fd=output_fd,
         pass_log_file=pass_log_file,
-        video_bitrate=video_bitrate,
-        audio_bitrate=audio_bitrate,
+        bitrate_v=bitrate_v,
+        bitrate_a=bitrate_a,
         graph=audio_filter_graph(options),
     )
 
@@ -491,7 +516,7 @@ def _remux_video(
     format: str,
     input_fds: list[int],
     output_fd: int,
-    audio_bitrate: int,
+    bitrate_a: int,
     audio_codec: str,
     graph: str | None,
 ):
@@ -507,7 +532,7 @@ def _remux_video(
             "-c:a",
             audio_codec,
             "-b:a",
-            f"{audio_bitrate}",
+            f"{bitrate_a}",
         ]
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
@@ -527,12 +552,12 @@ def _remux_video(
 
 def _needs_video_transcode(
     vcodec: str,
-    video_bitrate: int,
-    audio_bitrate: int,
+    input_bitrate_v: int,
+    input_bitrate_a: int,
     duration_seconds: int,
     filesize_limit: int,
 ):
-    if (video_bitrate + audio_bitrate) * duration_seconds > 8 * filesize_limit:
+    if (input_bitrate_v + input_bitrate_a) * duration_seconds > 8 * filesize_limit:
         return True
     for c in ["h264", "h265", "hvc1", "avc1", "vp09"]:
         if vcodec.startswith(c):
@@ -547,8 +572,10 @@ def _convert_video(
     storage_options: FileStorageOptions,
     input_codec_v: str,
     dest_codec_v: str,
-    video_bitrate: int,
-    audio_bitrate: int,
+    input_bitrate_v: int,
+    input_bitrate_a: int,
+    bitrate_v: int,
+    bitrate_a: int,
     duration_seconds: int,
     filesize_limit: int,
     input_fd_v: int,
@@ -558,8 +585,8 @@ def _convert_video(
     if extension == "mp4":
         if _needs_video_transcode(
             vcodec=input_codec_v,
-            video_bitrate=video_bitrate,
-            audio_bitrate=audio_bitrate,
+            input_bitrate_v=input_bitrate_v,
+            input_bitrate_a=input_bitrate_a,
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
         ):
@@ -569,8 +596,8 @@ def _convert_video(
                 pass_log_file=str(
                     pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
                 ),
-                video_bitrate=video_bitrate,
-                audio_bitrate=audio_bitrate,
+                bitrate_v=bitrate_v,
+                bitrate_a=bitrate_a,
                 video_fd=input_fd_v,
                 audio_fd=input_fd_a,
                 output_fd=output_fd,
@@ -582,7 +609,7 @@ def _convert_video(
                 format=format,
                 input_fds=[input_fd_v] + ([input_fd_a] if input_fd_a else []),
                 output_fd=output_fd,
-                audio_bitrate=audio_bitrate,
+                bitrate_a=bitrate_a,
                 audio_codec="libopus" if format == "webm" else "aac",
                 graph=options.filter_graph,
             )
@@ -591,7 +618,7 @@ def _convert_video(
         _transcode_webp(
             input_fd=input_fd_v,
             output_fd=output_fd,
-            video_bitrate=video_bitrate,
+            bitrate_v=bitrate_v,
         )
         return "webp"
 
@@ -618,11 +645,9 @@ def extract_content(
         input_filename_a = info.input_filename_a
         duration_seconds = info.duration_seconds
 
-        audio_bitrate = 64_000
-        video_bitrate = min(
-            8 * filesize_limit // duration_seconds - audio_bitrate, 4_096_000
-        )
-        if video_bitrate < 64_000:
+        bitrate_a = 64_000
+        bitrate_v = min(8 * filesize_limit // duration_seconds - bitrate_a, 4_096_000)
+        if bitrate_v < 64_000:
             raise discord.ext.commands.CommandError("File too big!")
 
         input_file_v = open(input_filename_v)
@@ -635,8 +660,10 @@ def extract_content(
             storage_options=storage_options,
             input_codec_v=input_codec_v,
             dest_codec_v=video_codec,
-            video_bitrate=video_bitrate,
-            audio_bitrate=audio_bitrate,
+            input_bitrate_v=info.input_bitrate_v,
+            input_bitrate_a=info.input_bitrate_a,
+            bitrate_v=bitrate_v,
+            bitrate_a=bitrate_a,
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
             input_fd_v=input_file_v.fileno(),
