@@ -448,10 +448,14 @@ def _yt_dlp_fetch(
                     input_filename_v = d["filepath"]
                     input_codec_v = d["vcodec"]
                     if d["acodec"] != "none":
-                        input_bitrate_v = d["tbr"]
+                        input_bitrate_v = (
+                            d["tbr"] * 1000 if "tbr" in d else 8 * max_video_dl_size
+                        )
                         input_bitrate_a = 0
                     else:
-                        input_bitrate_v = d["vbr"]
+                        input_bitrate_v = (
+                            d["vbr"] * 1000 if "vbr" in d else 8 * max_video_dl_size
+                        )
                 elif (
                     input_filename_a is None
                     and input_bitrate_a is None
@@ -459,7 +463,9 @@ def _yt_dlp_fetch(
                     and d["acodec"] != "none"
                 ):
                     input_filename_a = d["filepath"]
-                    input_bitrate_a = d["abr"]
+                    input_bitrate_a = (
+                        d["abr"] * 1000 if "abr" in d else 8 * max_audio_dl_size
+                    )
 
             if not (input_codec_v and input_filename_v and input_bitrate_v):
                 raise discord.ext.commands.CommandError("Video source not found!")
@@ -586,7 +592,7 @@ def _convert_video(
         if _needs_video_transcode(
             vcodec=input_codec_v,
             input_bitrate_v=input_bitrate_v,
-            input_bitrate_a=input_bitrate_a,
+            input_bitrate_a=bitrate_a,
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
         ):
