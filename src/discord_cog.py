@@ -3,6 +3,7 @@ import tempfile
 from typing import cast, Dict, Any, Tuple
 from types import TracebackType
 import io
+from functools import reduce
 import uuid
 import pathlib
 import os
@@ -152,7 +153,7 @@ def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
 
 
 def _transcode_h264_pass_2(
-    input_fd: int,
+    input_fds: list[int],
     output_fd: int,
     pass_log_file: str,
     video_bitrate: int,
@@ -162,10 +163,9 @@ def _transcode_h264_pass_2(
     with subprocess.Popen(
         args=[
             "ffmpeg",
-            "-fd",
-            f"{input_fd}",
-            "-i",
-            "fd:",
+        ]
+        + sum((["-fd", f"{fd}", "-i", "fd:"] for fd in input_fds), [])
+        + [
             "-f",
             "mp4",
             "-y",
@@ -193,7 +193,7 @@ def _transcode_h264_pass_2(
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
         stdout=sys.stdout,
-        pass_fds=[input_fd, output_fd],
+        pass_fds=input_fds + [output_fd],
     ) as proc:
         try:
             proc.wait(timeout=450)
@@ -254,7 +254,7 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, video_bitrate: int
 
 
 def _transcode_h265_pass_2(
-    input_fd: int,
+    input_fds: list[int],
     output_fd: int,
     pass_log_file: str,
     video_bitrate: int,
@@ -262,12 +262,9 @@ def _transcode_h265_pass_2(
     graph: str | None,
 ):
     with subprocess.Popen(
-        args=[
-            "ffmpeg",
-            "-fd",
-            f"{input_fd}",
-            "-i",
-            "fd:",
+        args=["ffmpeg"]
+        + sum((["-fd", f"{input_fd}", "-i", "fd:"] for input_fd in input_fds), [])
+        + [
             "-f",
             "mp4",
             "-y",
@@ -290,7 +287,7 @@ def _transcode_h265_pass_2(
         ]
         + (["-af", graph] if graph else [])
         + ["-fd", f"{output_fd}", "fd:"],
-        pass_fds=[input_fd, output_fd],
+        pass_fds=input_fds + [output_fd],
     ) as proc:
         try:
             proc.wait(timeout=450)
@@ -342,12 +339,65 @@ def _transcode_webp(input_fd: int, output_fd: int, video_bitrate: int):
             )
 
 
+def _content_duration_seconds(
+    duration_seconds: int | None, options: PlaybackOptions
+) -> int:
+    if not duration_seconds:
+        raise discord.ext.commands.CommandError("Duration unknown!")
+
+    if options.start_timestamp is not None and options.stop_timestamp is not None:
+        duration_seconds = (
+            timestamp_to_seconds(options.stop_timestamp)
+            - timestamp_to_seconds(options.start_timestamp)
+            + 1
+        )
+    elif options.start_timestamp is not None:
+        duration_seconds -= timestamp_to_seconds(options.start_timestamp)
+    elif options.stop_timestamp is not None:
+        duration_seconds = timestamp_to_seconds(options.stop_timestamp) + 1
+
+    if duration_seconds <= 1:
+        raise discord.ext.commands.CommandError("Invalid duration!")
+
+    return duration_seconds
+
+
+@dataclasses.dataclass
+class FetchResult:
+    title: str
+    input_codec_v: str
+    input_filename_v: str
+    input_filename_a: str | None
+    duration_seconds: int
+
+
 def _yt_dlp_fetch(
-    url: str, options: PlaybackOptions, storage_options: FileStorageOptions, uuid: str
-):
-    max_video_size = 128 * 1024 * 1024
-    max_audio_size = 64 * 1024 * 1924
-    format_str = f"bv[filesize<{max_video_size}]+ba[filesize<{max_audio_size}]/b[filesize<{max_video_size + max_audio_size}]/bv[filesize<{max_video_size}]/ba[filesize<{max_audio_size}]/bv+ba/b/bv/ba"
+    url: str,
+    options: PlaybackOptions,
+    storage_options: FileStorageOptions,
+    filesize_limit: int,
+    uuid: str,
+) -> FetchResult:
+    max_video_size = 0.8 * filesize_limit
+    max_video_dl_size = 128 * 1024 * 1024
+    max_audio_dl_size = 64 * 1024 * 1924
+    supported_vcodec = "vcodec~='^(hevc|avc|h264|h265|vp09)'"
+    format_str = "/".join(
+        [
+            f"bv[filesize<{max_video_size}][{supported_vcodec}],ba[filesize<{max_audio_dl_size}]",
+            f"b[filesize<{max_video_size}][{supported_vcodec}]",
+            f"bv[{supported_vcodec}],ba",
+            f"b[{supported_vcodec}]",
+            f"bv[filesize<{max_video_dl_size}],ba[filesize<{max_audio_dl_size}]",
+            f"b[filesize<{max_video_dl_size + max_audio_dl_size}]",
+            "bv,ba",
+            "b",
+            f"bv[filesize<{max_video_dl_size}]",
+            f"ba[filesize<{max_audio_dl_size}]",
+            "bv",
+            "ba",
+        ]
+    )
     time_range = ytdl_time_range(options)
     with subprocess.Popen(
         args=[
@@ -357,8 +407,8 @@ def _yt_dlp_fetch(
             "-f",
             format_str,
             "--max-filesize",
-            f"{max_video_size + max_audio_size}",
-            "-j",
+            f"{max_video_dl_size + max_audio_dl_size}",
+            "-J",
             "--no-simulate",
             "-o",
             f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}.%(ext)s",
@@ -369,16 +419,181 @@ def _yt_dlp_fetch(
         text=True,
     ) as proc:
         try:
-            [stdout, _] = proc.communicate(timeout=120)
+            stdout, _ = proc.communicate(timeout=120)
             if proc.returncode != 0:
                 raise discord.ext.commands.CommandError(
                     f"yt-dlp error {proc.returncode}"
                 )
-            return json.loads(stdout)
+            yt_dlp_info = json.loads(stdout)
+
+            input_codec_v = None
+            input_filename_v = None
+            input_filename_a = None
+            for d in yt_dlp_info["requested_downloads"]:
+                if input_filename_v is None and d["vcodec"] != "none":
+                    input_filename_v = d["filepath"]
+                    input_codec_v = d["vcodec"]
+                elif (
+                    input_filename_a is None
+                    and d["vcodec"] == "none"
+                    and d["acodec"] != "none"
+                ):
+                    input_filename_a = d["filepath"]
+
+            if not (input_codec_v and input_filename_v):
+                raise discord.ext.commands.CommandError("Video source not found!")
+
+            return FetchResult(
+                title=yt_dlp_info.get("title") or "No title.",
+                input_codec_v=input_codec_v,
+                input_filename_v=input_filename_v,
+                input_filename_a=input_filename_a,
+                duration_seconds=_content_duration_seconds(
+                    yt_dlp_info.get("duration"), options
+                ),
+            )
+
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
             raise discord.ext.commands.CommandError(f"yt-dlp fetch deadline exceeded")
+
+
+def _two_pass_transcode(
+    video_codec: str,
+    options: PlaybackOptions,
+    pass_log_file: str,
+    video_bitrate: int,
+    audio_bitrate: int,
+    video_fd: int,
+    audio_fd: int | None,
+    output_fd: int,
+):
+    transcode_pass_1 = (
+        _transcode_h265_pass_1 if (video_codec == "h265") else _transcode_h264_pass_1
+    )
+    transcode_pass_2 = (
+        _transcode_h265_pass_2 if (video_codec == "h265") else _transcode_h264_pass_2
+    )
+    transcode_pass_1(video_fd, pass_log_file, video_bitrate)
+    os.lseek(video_fd, 0, os.SEEK_SET)
+    transcode_pass_2(
+        input_fds=[video_fd] + [audio_fd] if audio_fd is not None else [],
+        output_fd=output_fd,
+        pass_log_file=pass_log_file,
+        video_bitrate=video_bitrate,
+        audio_bitrate=audio_bitrate,
+        graph=audio_filter_graph(options),
+    )
+
+
+def _remux_video(
+    format: str,
+    input_fds: list[int],
+    output_fd: int,
+    audio_bitrate: int,
+    audio_codec: str,
+    graph: str | None,
+):
+    with subprocess.Popen(
+        args=["ffmpeg"]
+        + sum((["-fd", f"{fd}", "-i", "fd:"] for fd in input_fds), [])
+        + [
+            "-f",
+            format,
+            "-y",
+            "-c:v",
+            "copy",
+            "-c:a",
+            audio_codec,
+            "-b:a",
+            f"{audio_bitrate}",
+        ]
+        + (["-af", graph] if graph else [])
+        + ["-fd", f"{output_fd}", "fd:"],
+        pass_fds=input_fds + [output_fd],
+    ) as proc:
+        try:
+            proc.wait(timeout=600)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on remux"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(f"ffmpeg remux deadline exceeded")
+
+
+def _needs_video_transcode(
+    vcodec: str,
+    video_bitrate: int,
+    audio_bitrate: int,
+    duration_seconds: int,
+    filesize_limit: int,
+):
+    if (video_bitrate + audio_bitrate) * duration_seconds > 8 * filesize_limit:
+        return True
+    for c in ["h264", "h265", "hvc1", "avc1", "vp09"]:
+        if vcodec.startswith(c):
+            return False
+    return True
+
+
+def _convert_video(
+    input_uuid: str,
+    extension: str,
+    options: PlaybackOptions,
+    storage_options: FileStorageOptions,
+    input_codec_v: str,
+    dest_codec_v: str,
+    video_bitrate: int,
+    audio_bitrate: int,
+    duration_seconds: int,
+    filesize_limit: int,
+    input_fd_v: int,
+    input_fd_a: int | None,
+    output_fd: int,
+) -> str:
+    if extension == "mp4":
+        if _needs_video_transcode(
+            vcodec=input_codec_v,
+            video_bitrate=video_bitrate,
+            audio_bitrate=audio_bitrate,
+            duration_seconds=duration_seconds,
+            filesize_limit=filesize_limit,
+        ):
+            _two_pass_transcode(
+                video_codec=dest_codec_v,
+                options=options,
+                pass_log_file=str(
+                    pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
+                ),
+                video_bitrate=video_bitrate,
+                audio_bitrate=audio_bitrate,
+                video_fd=input_fd_v,
+                audio_fd=input_fd_a,
+                output_fd=output_fd,
+            )
+            return "mp4"
+        else:
+            format = "webm" if input_codec_v.startswith("vp09") else "mp4"
+            _remux_video(
+                format=format,
+                input_fds=[input_fd_v] + ([input_fd_a] if input_fd_a else []),
+                output_fd=output_fd,
+                audio_bitrate=audio_bitrate,
+                audio_codec="libopus" if format == "webm" else "aac",
+                graph=options.filter_graph,
+            )
+            return format
+    else:  # webp
+        _transcode_webp(
+            input_fd=input_fd_v,
+            output_fd=output_fd,
+            video_bitrate=video_bitrate,
+        )
+        return "webp"
 
 
 def extract_content(
@@ -390,34 +605,18 @@ def extract_content(
     video_codec: str = "h265",
 ) -> Attachment:
     input_uuid = uuid.uuid4()
-    pass_log_file = str(
-        pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
-    )
-
-    input_file = None
+    input_file_v = None
+    input_file_a = None
     output_file = None
     try:
-        yt_dlp_info = _yt_dlp_fetch(url, options, storage_options, str(input_uuid))
-        input_filename = f"{pathlib.Path(storage_options.tmp_file_path) / str(input_uuid)}.{yt_dlp_info["ext"]}"
-        duration_seconds = yt_dlp_info.get("duration")
-        title = yt_dlp_info.get("title") or "No title."
-
-        if not duration_seconds:
-            raise discord.ext.commands.CommandError("Duration unknown!")
-
-        if options.start_timestamp is not None and options.stop_timestamp is not None:
-            duration_seconds = (
-                timestamp_to_seconds(options.stop_timestamp)
-                - timestamp_to_seconds(options.start_timestamp)
-                + 1
-            )
-        elif options.start_timestamp is not None:
-            duration_seconds -= timestamp_to_seconds(options.start_timestamp)
-        elif options.stop_timestamp is not None:
-            duration_seconds = timestamp_to_seconds(options.stop_timestamp) + 1
-
-        if duration_seconds <= 1:
-            raise discord.ext.commands.CommandError("Invalid duration!")
+        info = _yt_dlp_fetch(
+            url, options, storage_options, filesize_limit, str(input_uuid)
+        )
+        title = info.title
+        input_codec_v = info.input_codec_v
+        input_filename_v = info.input_filename_v
+        input_filename_a = info.input_filename_a
+        duration_seconds = info.duration_seconds
 
         audio_bitrate = 64_000
         video_bitrate = min(
@@ -426,49 +625,32 @@ def extract_content(
         if video_bitrate < 64_000:
             raise discord.ext.commands.CommandError("File too big!")
 
-        input_file = open(input_filename)
+        input_file_v = open(input_filename_v)
+        input_file_a = open(input_filename_a) if input_filename_a else None
+        output_file = _create_file(storage_options.storage_path, extension)
+        extension = _convert_video(
+            input_uuid=str(input_uuid),
+            extension=extension,
+            options=options,
+            storage_options=storage_options,
+            input_codec_v=input_codec_v,
+            dest_codec_v=video_codec,
+            video_bitrate=video_bitrate,
+            audio_bitrate=audio_bitrate,
+            duration_seconds=duration_seconds,
+            filesize_limit=filesize_limit,
+            input_fd_v=input_file_v.fileno(),
+            input_fd_a=input_file_a.fileno() if input_file_a else None,
+            output_fd=output_file.fileno(),
+        )
 
-        if extension == "mp4":
-            transcode_pass_1 = (
-                _transcode_h265_pass_1
-                if (video_codec == "h265")
-                else _transcode_h264_pass_1
-            )
-            transcode_pass_2 = (
-                _transcode_h265_pass_2
-                if (video_codec == "h265")
-                else _transcode_h264_pass_2
-            )
-
-            input_file.seek(0)
-            transcode_pass_1(input_file.fileno(), pass_log_file, video_bitrate)
-
-            input_file.seek(0)
-            output_file = _create_file(storage_options.storage_path, extension)
-            transcode_pass_2(
-                input_fd=input_file.fileno(),
-                output_fd=output_file.fileno(),
-                pass_log_file=pass_log_file,
-                video_bitrate=video_bitrate,
-                audio_bitrate=audio_bitrate,
-                graph=audio_filter_graph(options),
-            )
-        else:  # webp
-            input_file.seek(0)
-            output_file = _create_file(storage_options.storage_path, extension)
-            _transcode_webp(
-                input_fd=input_file.fileno(),
-                output_fd=output_file.fileno(),
-                video_bitrate=video_bitrate,
-            )
-
-        output_file.seek(0)
         if storage_options.url_path:
-            return Attachment(
-                title=title,
-                url=f"{storage_options.url_path}{os.path.basename(output_file.name)}",
-            )
+            url = f"{storage_options.url_path}{os.path.basename(output_file.name)}"
+            output_file.close()
+            output_file = None
+            return Attachment(title=title, url=url)
         else:
+            output_file.seek(0)
             return Attachment(
                 title=title,
                 inline_attachment=InlineAttachment(content=output_file, ext=extension),  # type: ignore
@@ -478,8 +660,10 @@ def extract_content(
             output_file.close()
         raise
     finally:
-        if input_file:
-            input_file.close()
+        if input_file_v:
+            input_file_v.close()
+        if input_file_a:
+            input_file_a.close()
 
         for path in os.scandir(storage_options.tmp_file_path):
             if str(input_uuid) in path.path:
