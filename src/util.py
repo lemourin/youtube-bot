@@ -11,10 +11,21 @@ import discord
 
 
 @dataclasses.dataclass
+class AttachmentOptions:
+    max_video_dl_size: int
+    max_audio_dl_size: int
+    max_size: int | None
+    audio_bitrate: int
+    min_video_bitrate: int
+    max_video_bitrate: int
+
+
+@dataclasses.dataclass
 class FileStorageOptions:
     storage_path: str | None
     url_path: str | None
     tmp_file_path: str
+    attachment: AttachmentOptions
 
 
 @dataclasses.dataclass

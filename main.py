@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import googleapiclient.discovery  # type: ignore
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 from src.discord_cog import DiscordCog, JellyfinLibraryClient
-from src.util import FileStorageOptions
+from src.util import FileStorageOptions, AttachmentOptions
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 
@@ -33,6 +33,20 @@ JELLYFIN_PASSWORD = os.environ.get("JELLYFIN_PASSWORD")
 FILE_STORAGE_PATH = os.environ.get("FILE_STORAGE_PATH")
 FILE_URL_PATH = os.environ.get("FILE_URL_PATH")
 TMP_FILE_PATH = os.environ.get("TMP_FILE_PATH", "./tmp/")
+ATTACHMENT_MAX_SIZE = os.environ.get("ATTACHMENT_MAX_SIZE")
+ATTACHMENT_MAX_VIDEO_DL_SIZE = int(
+    os.environ.get("ATTACHMENT_MAX_VIDEO_DL_SIZE", str(128 * 1024 * 1924))
+)
+ATTACHMENT_MAX_AUDIO_DL_SIZE = int(
+    os.environ.get("ATTACHMENT_MAX_AUDIO_DL_SIZE", str(64 * 1024 * 1024))
+)
+ATTACHMENT_AUDIO_BITRATE = int(os.environ.get("ATTACHMENT_AUDIO_BITRATE", 64_000))
+ATTACHMENT_MIN_VIDEO_BITRATE = int(
+    os.environ.get("ATTACHMENT_MIN_VIDEO_BITRATE", 64_000)
+)
+ATTACHMENT_MAX_VIDEO_BITRATE = int(
+    os.environ.get("ATTACHMENT_MAX_VIDEO_BITRATE", 4_096_000)
+)
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -107,6 +121,18 @@ async def main() -> None:
                         storage_path=FILE_STORAGE_PATH,
                         url_path=FILE_URL_PATH,
                         tmp_file_path=TMP_FILE_PATH,
+                        attachment=AttachmentOptions(
+                            max_size=(
+                                int(ATTACHMENT_MAX_SIZE)
+                                if ATTACHMENT_MAX_SIZE
+                                else None
+                            ),
+                            max_video_dl_size=ATTACHMENT_MAX_VIDEO_DL_SIZE,
+                            max_audio_dl_size=ATTACHMENT_MAX_AUDIO_DL_SIZE,
+                            audio_bitrate=ATTACHMENT_AUDIO_BITRATE,
+                            min_video_bitrate=ATTACHMENT_MIN_VIDEO_BITRATE,
+                            max_video_bitrate=ATTACHMENT_MAX_VIDEO_BITRATE,
+                        ),
                     ),
                 )
             )

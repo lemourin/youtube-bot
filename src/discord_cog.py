@@ -381,8 +381,8 @@ def _yt_dlp_fetch(
     uuid: str,
 ) -> FetchResult:
     max_video_size = 0.8 * filesize_limit
-    max_video_dl_size = 128 * 1024 * 1024
-    max_audio_dl_size = 64 * 1024 * 1924
+    max_video_dl_size = storage_options.attachment.max_video_dl_size
+    max_audio_dl_size = storage_options.attachment.max_audio_dl_size
     supported_vcodec = "vcodec~='^(hevc|avc|h264|h265|vp09)'"
     format_str = "/".join(
         [
@@ -645,9 +645,12 @@ def extract_content(
         input_filename_a = info.input_filename_a
         duration_seconds = info.duration_seconds
 
-        bitrate_a = 64_000
-        bitrate_v = min(8 * filesize_limit // duration_seconds - bitrate_a, 4_096_000)
-        if bitrate_v < 64_000:
+        bitrate_a = storage_options.attachment.audio_bitrate
+        bitrate_v = min(
+            8 * filesize_limit // duration_seconds - bitrate_a,
+            storage_options.attachment.max_video_bitrate,
+        )
+        if bitrate_v < storage_options.attachment.min_video_bitrate:
             raise discord.ext.commands.CommandError("File too big!")
 
         input_file_v = open(input_filename_v)
@@ -1252,9 +1255,14 @@ class DiscordCog(discord.ext.commands.Cog):
                 raise discord.ext.commands.CommandError("Video codec not supported.")
 
             filesize_limit = (
-                interaction.guild.filesize_limit
-                if interaction.guild
-                else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
+                self.file_storage_options.attachment.max_size
+                if self.file_storage_options.attachment.max_size is not None
+                and self.file_storage_options.url_path is not None
+                else (
+                    interaction.guild.filesize_limit
+                    if interaction.guild
+                    else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
+                )
             )
             with await asyncio.get_running_loop().run_in_executor(
                 self.transcode_executor,
