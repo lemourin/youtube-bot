@@ -339,27 +339,32 @@ def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
             )
 
 
-def _content_duration_seconds(
-    duration_seconds: int | None, options: PlaybackOptions
-) -> int:
-    if not duration_seconds:
-        raise discord.ext.commands.CommandError("Duration unknown!")
-
-    if options.start_timestamp is not None and options.stop_timestamp is not None:
-        duration_seconds = (
-            timestamp_to_seconds(options.stop_timestamp)
-            - timestamp_to_seconds(options.start_timestamp)
-            + 1
-        )
-    elif options.start_timestamp is not None:
-        duration_seconds -= timestamp_to_seconds(options.start_timestamp)
-    elif options.stop_timestamp is not None:
-        duration_seconds = timestamp_to_seconds(options.stop_timestamp) + 1
-
-    if duration_seconds <= 1:
-        raise discord.ext.commands.CommandError("Invalid duration!")
-
-    return duration_seconds
+def _ffprobe_media(url: str):
+    with subprocess.Popen(
+        args=[
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            url,
+        ],
+        stdout=subprocess.PIPE,
+    ) as proc:
+        try:
+            stdout, _ = proc.communicate(timeout=10)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on transcode"
+                )
+            data = json.loads(stdout)
+            return data
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(f"ffprobe deadline exceeded")
 
 
 def _supported_codecs():
@@ -441,50 +446,50 @@ def _yt_dlp_fetch(
                     f"yt-dlp error {proc.returncode}"
                 )
             yt_dlp_info = json.loads(stdout)
-            if "requested_downloads" not in yt_dlp_info:
-                raise discord.ext.commands.CommandError(
-                    f"yt-dlp couldn't download any files"
-                )
-
             input_codec_v = None
             input_filename_v = None
             input_filename_a = None
             input_bitrate_v = None
             input_bitrate_a = None
-            for d in yt_dlp_info["requested_downloads"]:
-                has_video = ("vcodec" in d and d["vcodec"] != "none") or (
-                    "video_ext" in d and d["video_ext"] != "none"
-                )
-                has_audio = ("acodec" in d and d["acodec"] != "none") or (
-                    "audio_ext" in d and d["audio_ext"] != "none"
-                )
+            input_duration_seconds = None
+            for path in os.scandir(storage_options.tmp_file_path):
+                if str(uuid) not in path.path:
+                    continue
+                video = _ffprobe_media(path.path)
+                video_format = video["format"]
+                for stream in video["streams"]:
+                    if input_filename_v is None and stream["codec_type"] == "video":
+                        input_filename_v = path.path
+                        input_codec_v = stream["codec_tag_string"]
+                        input_bitrate_v = (
+                            int(stream["bit_rate"])
+                            if "bit_rate" in stream
+                            else int(video_format["bit_rate"])
+                        )
+                        input_duration_seconds = (
+                            int(float(stream["duration"]))
+                            if "duration" in stream
+                            else int(float(video_format["duration"]))
+                        )
+                    if input_filename_a is None and stream["codec_type"] == "audio":
+                        input_filename_a = path.path
+                        input_bitrate_a = (
+                            int(stream["bit_rate"])
+                            if "bit_rate" in stream
+                            else int(video_format["bit_rate"])
+                        )
 
-                br = list(map(lambda t: d[t], filter(lambda t: t in d, ["tbr", "br"])))
-                bitrate = 1000 * br[0] if len(br) > 0 else max_video_dl_size * 8
-                bitrate_v = 1000 * d["vbr"] if "vbr" in d else bitrate
-                bitrate_a = 1000 * d["abr"] if "abr" in d else bitrate
+            if input_filename_v == input_filename_a:
+                input_filename_a = None
 
-                if input_filename_v is None and has_video:
-                    input_filename_v = d["filepath"]
-                    input_codec_v = d["vcodec"] if "vcodec" in d else ""
-                    if has_audio:
-                        input_bitrate_v = bitrate_v
-                        input_bitrate_a = 0
-                    else:
-                        input_bitrate_v = bitrate_v
-                elif (
-                    input_filename_a is None
-                    and input_bitrate_a is None
-                    and not has_video
-                    and has_audio
-                ):
-                    input_filename_a = d["filepath"]
-                    input_bitrate_a = bitrate_a
-
-            if not (input_codec_v and input_filename_v and input_bitrate_v):
+            if (
+                input_codec_v is None
+                or input_filename_v is None
+                or input_bitrate_v is None
+            ):
                 raise discord.ext.commands.CommandError("Video source not found!")
-            if input_bitrate_a is None:
-                raise discord.ext.commands.CommandError("No audio found!")
+            if input_duration_seconds is None:
+                raise discord.ext.commands.CommandError("Duration unknown!")
 
             return FetchResult(
                 title=yt_dlp_info.get("title") or "No title.",
@@ -492,10 +497,8 @@ def _yt_dlp_fetch(
                 input_filename_v=input_filename_v,
                 input_filename_a=input_filename_a,
                 input_bitrate_v=input_bitrate_v,
-                input_bitrate_a=input_bitrate_a,
-                duration_seconds=_content_duration_seconds(
-                    yt_dlp_info.get("duration"), options
-                ),
+                input_bitrate_a=input_bitrate_a or 0,
+                duration_seconds=input_duration_seconds,
             )
 
         except subprocess.TimeoutExpired:
@@ -523,7 +526,7 @@ def _two_pass_transcode(
     transcode_pass_1(video_fd, pass_log_file, bitrate_v)
     os.lseek(video_fd, 0, os.SEEK_SET)
     transcode_pass_2(
-        input_fds=[video_fd] + [audio_fd] if audio_fd is not None else [],
+        input_fds=[video_fd] + ([audio_fd] if audio_fd is not None else []),
         output_fd=output_fd,
         pass_log_file=pass_log_file,
         bitrate_v=bitrate_v,
@@ -600,9 +603,17 @@ def _convert_video(
     filesize_limit: int,
     input_fd_v: int,
     input_fd_a: int | None,
-    output_fd: int,
-) -> str:
-    if extension == "mp4":
+):
+    output_file = None
+    try:
+        if extension == "webp":
+            output_file = _create_file(storage_options.storage_path, "webp")
+            _transcode_webp(
+                input_fd=input_fd_v,
+                output_fd=output_file.fileno(),
+                bitrate_v=bitrate_v,
+            )
+            return output_file, "webp"
         if _needs_video_transcode(
             vcodec=input_codec_v,
             input_bitrate_v=input_bitrate_v,
@@ -610,6 +621,7 @@ def _convert_video(
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
         ):
+            output_file = _create_file(storage_options.storage_path, "mp4")
             _two_pass_transcode(
                 video_codec=dest_codec_v,
                 options=options,
@@ -620,27 +632,25 @@ def _convert_video(
                 bitrate_a=bitrate_a,
                 video_fd=input_fd_v,
                 audio_fd=input_fd_a,
-                output_fd=output_fd,
+                output_fd=output_file.fileno(),
             )
-            return "mp4"
+            return output_file, "mp4"
         else:
             format = "webm" if input_codec_v.startswith("vp09") else "mp4"
+            output_file = _create_file(storage_options.storage_path, format)
             _remux_video(
                 format=format,
                 input_fds=[input_fd_v] + ([input_fd_a] if input_fd_a else []),
-                output_fd=output_fd,
+                output_fd=output_file.fileno(),
                 bitrate_a=bitrate_a,
                 audio_codec="libopus" if format == "webm" else "aac",
                 graph=options.filter_graph,
             )
-            return format
-    else:  # webp
-        _transcode_webp(
-            input_fd=input_fd_v,
-            output_fd=output_fd,
-            bitrate_v=bitrate_v,
-        )
-        return "webp"
+            return output_file, format
+    except:
+        if output_file:
+            output_file.close()
+        raise
 
 
 def extract_content(
@@ -675,8 +685,7 @@ def extract_content(
 
         input_file_v = open(input_filename_v)
         input_file_a = open(input_filename_a) if input_filename_a else None
-        output_file = _create_file(storage_options.storage_path, extension)
-        extension = _convert_video(
+        output_file, extension = _convert_video(
             input_uuid=str(input_uuid),
             extension=extension,
             options=options,
@@ -691,7 +700,6 @@ def extract_content(
             filesize_limit=filesize_limit,
             input_fd_v=input_file_v.fileno(),
             input_fd_a=input_file_a.fileno() if input_file_a else None,
-            output_fd=output_file.fileno(),
         )
 
         if storage_options.url_path:
