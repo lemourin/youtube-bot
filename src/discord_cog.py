@@ -452,31 +452,34 @@ def _yt_dlp_fetch(
             input_bitrate_v = None
             input_bitrate_a = None
             for d in yt_dlp_info["requested_downloads"]:
-                if input_filename_v is None and "vcodec" in d and d["vcodec"] != "none":
+                has_video = ("vcodec" in d and d["vcodec"] != "none") or (
+                    "video_ext" in d and d["video_ext"] != "none"
+                )
+                has_audio = ("acodec" in d and d["acodec"] != "none") or (
+                    "audio_ext" in d and d["audio_ext"] != "none"
+                )
+
+                br = list(map(lambda t: d[t], filter(lambda t: t in d, ["tbr", "br"])))
+                bitrate = 1000 * br[0] if len(br) > 0 else max_video_dl_size * 8
+                bitrate_v = 1000 * d["vbr"] if "vbr" in d else bitrate
+                bitrate_a = 1000 * d["abr"] if "abr" in d else bitrate
+
+                if input_filename_v is None and has_video:
                     input_filename_v = d["filepath"]
-                    input_codec_v = d["vcodec"]
-                    if "acodec" in d and d["acodec"] != "none":
-                        input_bitrate_v = (
-                            d["tbr"] * 1000 if "tbr" in d else 8 * max_video_dl_size
-                        )
+                    input_codec_v = d["vcodec"] if "vcodec" in d else ""
+                    if has_audio:
+                        input_bitrate_v = bitrate_v
                         input_bitrate_a = 0
                     else:
-                        input_bitrate_v = (
-                            d["vbr"] * 1000 if "vbr" in d else 8 * max_video_dl_size
-                        )
+                        input_bitrate_v = bitrate_v
                 elif (
                     input_filename_a is None
                     and input_bitrate_a is None
-                    and ("vcodec" not in d or d["vcodec"] == "none")
-                    and (
-                        ("acodec" in d and d["acodec"] != "none")
-                        or ("audio_ext" in d and d["audio_ext"] != "none")
-                    )
+                    and not has_video
+                    and has_audio
                 ):
                     input_filename_a = d["filepath"]
-                    input_bitrate_a = (
-                        d["abr"] * 1000 if "abr" in d else 8 * max_audio_dl_size
-                    )
+                    input_bitrate_a = bitrate_a
 
             if not (input_codec_v and input_filename_v and input_bitrate_v):
                 raise discord.ext.commands.CommandError("Video source not found!")
