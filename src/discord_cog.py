@@ -1,5 +1,4 @@
 import asyncio
-import tempfile
 from typing import cast, Dict, Any, Tuple
 from types import TracebackType
 import io
@@ -43,7 +42,7 @@ from src.util import (
 
 @dataclasses.dataclass
 class InlineAttachment:
-    content: io.BufferedIOBase
+    content_path: str
     ext: str
 
     def __enter__(self):
@@ -55,7 +54,7 @@ class InlineAttachment:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ):
-        self.content.close()
+        os.remove(self.content_path)
 
 
 @dataclasses.dataclass
@@ -92,25 +91,12 @@ def timestamp_to_seconds(timestamp: str) -> int:
     return ts
 
 
-def _create_file(storage_path: str | None, extension: str):
-    if storage_path:
-        file = tempfile.NamedTemporaryFile(
-            dir=storage_path, suffix=f".{extension}", delete=False
-        )
-        os.chmod(file.fileno(), mode=0o644)
-        return file
-    else:
-        return tempfile.TemporaryFile()
-
-
-def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
+def _transcode_h264_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
-            "-fd",
-            f"{input_fd}",
             "-i",
-            "fd:",
+            input_v,
             "-f",
             "mp4",
             "-y",
@@ -136,7 +122,6 @@ def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
             f"{"NUL" if os.name == "nt" else "/dev/null"}",
         ],
         stdout=sys.stdout,
-        pass_fds=[input_fd],
     ) as proc:
         try:
             proc.wait(timeout=300)
@@ -153,8 +138,8 @@ def _transcode_h264_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
 
 
 def _transcode_h264_pass_2(
-    input_fds: list[int],
-    output_fd: int,
+    input: list[str],
+    output: str,
     pass_log_file: str,
     bitrate_v: int,
     bitrate_a: int,
@@ -164,10 +149,12 @@ def _transcode_h264_pass_2(
         args=[
             "ffmpeg",
         ]
-        + sum((["-fd", f"{fd}", "-i", "fd:"] for fd in input_fds), [])
+        + sum((["-i", path] for path in input), [])
         + [
             "-f",
             "mp4",
+            "-movflags",
+            "+faststart",
             "-y",
             "-passlogfile",
             pass_log_file,
@@ -191,9 +178,8 @@ def _transcode_h264_pass_2(
             f"{bitrate_a}",
         ]
         + (["-af", graph] if graph else [])
-        + ["-fd", f"{output_fd}", "fd:"],
+        + [output],
         stdout=sys.stdout,
-        pass_fds=input_fds + [output_fd],
     ) as proc:
         try:
             proc.wait(timeout=450)
@@ -209,14 +195,12 @@ def _transcode_h264_pass_2(
             )
 
 
-def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
+def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
-            "-fd",
-            f"{input_fd}",
             "-i",
-            "fd:",
+            input_v,
             "-f",
             "mp4",
             "-y",
@@ -236,8 +220,7 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
             "-f",
             "null",
             f"{"NUL" if os.name == "nt" else "/dev/null"}",
-        ],
-        pass_fds=[input_fd],
+        ]
     ) as proc:
         try:
             proc.wait(timeout=300)
@@ -254,8 +237,8 @@ def _transcode_h265_pass_1(input_fd: int, pass_log_file: str, bitrate_v: int):
 
 
 def _transcode_h265_pass_2(
-    input_fds: list[int],
-    output_fd: int,
+    input: list[str],
+    output: str,
     pass_log_file: str,
     bitrate_v: int,
     bitrate_a: int,
@@ -263,10 +246,12 @@ def _transcode_h265_pass_2(
 ):
     with subprocess.Popen(
         args=["ffmpeg"]
-        + sum((["-fd", f"{input_fd}", "-i", "fd:"] for input_fd in input_fds), [])
+        + sum((["-i", path] for path in input), [])
         + [
             "-f",
             "mp4",
+            "-movflags",
+            "+faststart",
             "-y",
             "-b:v",
             f"{bitrate_v}",
@@ -286,8 +271,7 @@ def _transcode_h265_pass_2(
             f"stats={pass_log_file}:pass=2:frame-threads=2:pools=4",
         ]
         + (["-af", graph] if graph else [])
-        + ["-fd", f"{output_fd}", "fd:"],
-        pass_fds=input_fds + [output_fd],
+        + [output]
     ) as proc:
         try:
             proc.wait(timeout=450)
@@ -303,14 +287,12 @@ def _transcode_h265_pass_2(
             )
 
 
-def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
+def _transcode_webp(input: str, output: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
             "ffmpeg",
-            "-fd",
-            f"{input_fd}",
             "-i",
-            "fd:",
+            input,
             "-f",
             "webp",
             "-y",
@@ -321,9 +303,8 @@ def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
             "-vf",
             "scale=320:-2",
             "-an",
+            output,
         ]
-        + ["-fd", f"{output_fd}", "fd:"],
-        pass_fds=[input_fd, output_fd],
     ) as proc:
         try:
             proc.wait(timeout=600)
@@ -341,31 +322,31 @@ def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
 
 def _transcode_audio(
     format: str,
-    input_fd: int,
-    output_fd: int,
+    input_a: str,
+    output: str,
     bitrate_a: int,
-    audio_codec: str,
+    codec_a: str,
     graph: str | None,
 ):
     with subprocess.Popen(
         args=[
             "ffmpeg",
-            "-fd",
-            f"{input_fd}",
             "-i",
-            "fd:",
+            input_a,
             "-f",
             format,
+        ]
+        + (["-movflags", "+faststart"] if format == "mp4" else [])
+        + [
             "-y",
             "-vn",
             "-c:a",
-            audio_codec,
+            codec_a,
             "-b:a",
             f"{bitrate_a}",
         ]
         + (["-af", graph] if graph else [])
-        + ["-fd", f"{output_fd}", "fd:"],
-        pass_fds=[input_fd, output_fd],
+        + [output]
     ) as proc:
         try:
             proc.wait(timeout=600)
@@ -549,26 +530,25 @@ def _yt_dlp_fetch(
 
 
 def _two_pass_transcode(
-    video_codec: str,
+    codec_v: str,
     options: PlaybackOptions,
     pass_log_file: str,
     bitrate_v: int,
     bitrate_a: int,
-    video_fd: int,
-    audio_fd: int | None,
-    output_fd: int,
+    input_v: str,
+    input_a: str | None,
+    output: str,
 ):
     transcode_pass_1 = (
-        _transcode_h265_pass_1 if (video_codec == "h265") else _transcode_h264_pass_1
+        _transcode_h265_pass_1 if (codec_v == "h265") else _transcode_h264_pass_1
     )
     transcode_pass_2 = (
-        _transcode_h265_pass_2 if (video_codec == "h265") else _transcode_h264_pass_2
+        _transcode_h265_pass_2 if (codec_v == "h265") else _transcode_h264_pass_2
     )
-    transcode_pass_1(video_fd, pass_log_file, bitrate_v)
-    os.lseek(video_fd, 0, os.SEEK_SET)
+    transcode_pass_1(input_v, pass_log_file, bitrate_v)
     transcode_pass_2(
-        input_fds=[video_fd] + ([audio_fd] if audio_fd is not None else []),
-        output_fd=output_fd,
+        input=[input_v] + ([input_a] if input_a is not None else []),
+        output=output,
         pass_log_file=pass_log_file,
         bitrate_v=bitrate_v,
         bitrate_a=bitrate_a,
@@ -578,18 +558,21 @@ def _two_pass_transcode(
 
 def _remux_video(
     format: str,
-    input_fds: list[int],
-    output_fd: int,
+    input: list[str],
+    output_filepath: str,
     bitrate_a: int,
     audio_codec: str,
     graph: str | None,
 ):
     with subprocess.Popen(
         args=["ffmpeg"]
-        + sum((["-fd", f"{fd}", "-i", "fd:"] for fd in input_fds), [])
+        + sum((["-i", path] for path in input), [])
         + [
             "-f",
             format,
+        ]
+        + (["-movflags", "+faststart"] if format == "mp4" else [])
+        + [
             "-y",
             "-c:v",
             "copy",
@@ -599,8 +582,7 @@ def _remux_video(
             f"{bitrate_a}",
         ]
         + (["-af", graph] if graph else [])
-        + ["-fd", f"{output_fd}", "fd:"],
-        pass_fds=input_fds + [output_fd],
+        + [output_filepath],
     ) as proc:
         try:
             proc.wait(timeout=600)
@@ -642,36 +624,46 @@ def _convert_video(
     bitrate_a: int,
     duration_seconds: int,
     filesize_limit: int,
-    input_fd_v: int | None,
-    input_fd_a: int | None,
+    input_v: str | None,
+    input_a: str | None,
 ):
-    output_file = None
+    def _output_filepath(format: str):
+        if storage_options.storage_path:
+            return str(
+                pathlib.Path(storage_options.storage_path) / f"{input_uuid}.{format}"
+            )
+        else:
+            return str(
+                pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.{format}"
+            )
+
+    output_filepath = None
     try:
         if extension == "webp":
-            if input_fd_v is None:
+            if input_v is None:
                 raise discord.ext.commands.CommandError(
                     "Can't make a GIF with no video."
                 )
-            output_file = _create_file(storage_options.storage_path, "webp")
+            output_filepath = _output_filepath("webm")
             _transcode_webp(
-                input_fd=input_fd_v,
-                output_fd=output_file.fileno(),
+                input=input_v,
+                output=output_filepath,
                 bitrate_v=bitrate_v,
             )
-            return output_file, "webp"
-        if input_codec_v is None or input_bitrate_v is None or input_fd_v is None:
-            if input_fd_a is None:
+            return output_filepath
+        if input_codec_v is None or input_bitrate_v is None or input_v is None:
+            if input_a is None:
                 raise discord.ext.commands.CommandError("No media file to convert.")
-            output_file = _create_file(storage_options.storage_path, "m4a")
+            output_filepath = _output_filepath("m4a")
             _transcode_audio(
                 format="mp4",
-                input_fd=input_fd_a,
-                output_fd=output_file.fileno(),
+                input_a=input_a,
+                output=output_filepath,
                 bitrate_a=bitrate_a,
-                audio_codec="aac",
+                codec_a="aac",
                 graph=options.filter_graph,
             )
-            return output_file, "m4a"
+            return output_filepath
         if _needs_video_transcode(
             vcodec=input_codec_v,
             input_bitrate_v=input_bitrate_v,
@@ -679,35 +671,35 @@ def _convert_video(
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
         ):
-            output_file = _create_file(storage_options.storage_path, "mp4")
+            output_filepath = _output_filepath("mp4")
             _two_pass_transcode(
-                video_codec=dest_codec_v,
+                codec_v=dest_codec_v,
                 options=options,
                 pass_log_file=str(
                     pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
                 ),
                 bitrate_v=bitrate_v,
                 bitrate_a=bitrate_a,
-                video_fd=input_fd_v,
-                audio_fd=input_fd_a,
-                output_fd=output_file.fileno(),
+                input_v=input_v,
+                input_a=input_a,
+                output=output_filepath,
             )
-            return output_file, "mp4"
+            return output_filepath
         else:
             format = "webm" if input_codec_v.startswith("vp09") else "mp4"
-            output_file = _create_file(storage_options.storage_path, format)
+            output_filepath = _output_filepath(format)
             _remux_video(
                 format=format,
-                input_fds=[input_fd_v] + ([input_fd_a] if input_fd_a else []),
-                output_fd=output_file.fileno(),
+                input=[input_v] + ([input_a] if input_a else []),
+                output_filepath=output_filepath,
                 bitrate_a=bitrate_a,
                 audio_codec="libopus" if format == "webm" else "aac",
                 graph=options.filter_graph,
             )
-            return output_file, format
+            return output_filepath
     except:
-        if output_file:
-            output_file.close()
+        if output_filepath and os.path.exists(output_filepath):
+            os.remove(output_filepath)
         raise
 
 
@@ -720,9 +712,7 @@ def extract_content(
     video_codec: str = "h265",
 ) -> Attachment:
     input_uuid = uuid.uuid4()
-    input_file_v = None
-    input_file_a = None
-    output_file = None
+    output_filepath = None
     try:
         info = _yt_dlp_fetch(
             url, options, storage_options, filesize_limit, str(input_uuid)
@@ -741,9 +731,7 @@ def extract_content(
         if bitrate_v < storage_options.attachment.min_video_bitrate:
             raise discord.ext.commands.CommandError("File too big!")
 
-        input_file_v = open(input_filename_v) if input_filename_v else None
-        input_file_a = open(input_filename_a) if input_filename_a else None
-        output_file, extension = _convert_video(
+        output_filepath = _convert_video(
             input_uuid=str(input_uuid),
             extension=extension,
             options=options,
@@ -756,33 +744,25 @@ def extract_content(
             bitrate_a=bitrate_a,
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
-            input_fd_v=input_file_v.fileno() if input_file_v else None,
-            input_fd_a=input_file_a.fileno() if input_file_a else None,
+            input_v=input_filename_v,
+            input_a=input_filename_a,
         )
 
         if storage_options.url_path:
-            url = f"{storage_options.url_path}{os.path.basename(output_file.name)}"
-            output_file.close()
-            output_file = None
+            url = f"{storage_options.url_path}{os.path.basename(output_filepath)}"
             return Attachment(title=title, url=url)
         else:
-            output_file.seek(0)
             return Attachment(
                 title=title,
-                inline_attachment=InlineAttachment(content=output_file, ext=extension),  # type: ignore
+                inline_attachment=InlineAttachment(content_path=output_filepath, ext=extension),  # type: ignore
             )
     except:
-        if output_file:
-            output_file.close()
+        if output_filepath and os.path.exists(output_filepath):
+            os.remove(output_filepath)
         raise
     finally:
-        if input_file_v:
-            input_file_v.close()
-        if input_file_a:
-            input_file_a.close()
-
         for path in os.scandir(storage_options.tmp_file_path):
-            if str(input_uuid) in path.path:
+            if str(input_uuid) in path.path and path.path != output_filepath:
                 os.remove(path)
 
 
@@ -1372,7 +1352,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     await interaction.followup.send(
                         content=f"## {attachment.title}",
                         file=discord.File(
-                            attachment.inline_attachment.content,
+                            attachment.inline_attachment.content_path,
                             filename=f"file.{attachment.inline_attachment.ext}",
                         ),
                     )
