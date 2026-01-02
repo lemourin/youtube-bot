@@ -339,6 +339,48 @@ def _transcode_webp(input_fd: int, output_fd: int, bitrate_v: int):
             )
 
 
+def _transcode_audio(
+    format: str,
+    input_fd: int,
+    output_fd: int,
+    bitrate_a: int,
+    audio_codec: str,
+    graph: str | None,
+):
+    with subprocess.Popen(
+        args=[
+            "ffmpeg",
+            "-fd",
+            f"{input_fd}",
+            "-i",
+            "fd:",
+            "-f",
+            format,
+            "-y",
+            "-vn",
+            "-c:a",
+            audio_codec,
+            "-b:a",
+            f"{bitrate_a}",
+        ]
+        + (["-af", graph] if graph else [])
+        + ["-fd", f"{output_fd}", "fd:"],
+        pass_fds=[input_fd, output_fd],
+    ) as proc:
+        try:
+            proc.wait(timeout=600)
+            if proc.returncode != 0:
+                raise discord.ext.commands.CommandError(
+                    f"ffmpeg error {proc.returncode} on transcode"
+                )
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait()
+            raise discord.ext.commands.CommandError(
+                f"ffmpeg transcode deadline exceeded"
+            )
+
+
 def _ffprobe_media(url: str):
     with subprocess.Popen(
         args=[
@@ -374,11 +416,11 @@ def _supported_codecs():
 @dataclasses.dataclass
 class FetchResult:
     title: str
-    input_codec_v: str
-    input_filename_v: str
+    input_codec_v: str | None
+    input_filename_v: str | None
     input_filename_a: str | None
-    input_bitrate_v: int
-    input_bitrate_a: int
+    input_bitrate_v: int | None
+    input_bitrate_a: int | None
     duration_seconds: int
 
 
@@ -478,16 +520,15 @@ def _yt_dlp_fetch(
                             if "bit_rate" in stream
                             else int(video_format["bit_rate"])
                         )
+                        input_duration_seconds = (
+                            int(float(stream["duration"]))
+                            if "duration" in stream
+                            else int(float(video_format["duration"]))
+                        )
 
             if input_filename_v == input_filename_a:
                 input_filename_a = None
 
-            if (
-                input_codec_v is None
-                or input_filename_v is None
-                or input_bitrate_v is None
-            ):
-                raise discord.ext.commands.CommandError("Video source not found!")
             if input_duration_seconds is None:
                 raise discord.ext.commands.CommandError("Duration unknown!")
 
@@ -593,20 +634,24 @@ def _convert_video(
     extension: str,
     options: PlaybackOptions,
     storage_options: FileStorageOptions,
-    input_codec_v: str,
+    input_codec_v: str | None,
     dest_codec_v: str,
-    input_bitrate_v: int,
-    input_bitrate_a: int,
+    input_bitrate_v: int | None,
+    input_bitrate_a: int | None,
     bitrate_v: int,
     bitrate_a: int,
     duration_seconds: int,
     filesize_limit: int,
-    input_fd_v: int,
+    input_fd_v: int | None,
     input_fd_a: int | None,
 ):
     output_file = None
     try:
         if extension == "webp":
+            if input_fd_v is None:
+                raise discord.ext.commands.CommandError(
+                    "Can't make a GIF with no video."
+                )
             output_file = _create_file(storage_options.storage_path, "webp")
             _transcode_webp(
                 input_fd=input_fd_v,
@@ -614,6 +659,19 @@ def _convert_video(
                 bitrate_v=bitrate_v,
             )
             return output_file, "webp"
+        if input_codec_v is None or input_bitrate_v is None or input_fd_v is None:
+            if input_fd_a is None:
+                raise discord.ext.commands.CommandError("No media file to convert.")
+            output_file = _create_file(storage_options.storage_path, "m4a")
+            _transcode_audio(
+                format="mp4",
+                input_fd=input_fd_a,
+                output_fd=output_file.fileno(),
+                bitrate_a=bitrate_a,
+                audio_codec="aac",
+                graph=options.filter_graph,
+            )
+            return output_file, "m4a"
         if _needs_video_transcode(
             vcodec=input_codec_v,
             input_bitrate_v=input_bitrate_v,
@@ -683,7 +741,7 @@ def extract_content(
         if bitrate_v < storage_options.attachment.min_video_bitrate:
             raise discord.ext.commands.CommandError("File too big!")
 
-        input_file_v = open(input_filename_v)
+        input_file_v = open(input_filename_v) if input_filename_v else None
         input_file_a = open(input_filename_a) if input_filename_a else None
         output_file, extension = _convert_video(
             input_uuid=str(input_uuid),
@@ -698,7 +756,7 @@ def extract_content(
             bitrate_a=bitrate_a,
             duration_seconds=duration_seconds,
             filesize_limit=filesize_limit,
-            input_fd_v=input_file_v.fileno(),
+            input_fd_v=input_file_v.fileno() if input_file_v else None,
             input_fd_a=input_file_a.fileno() if input_file_a else None,
         )
 
