@@ -427,7 +427,7 @@ def _yt_dlp_fetch(
             "-J",
             "--no-simulate",
             "-o",
-            f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}.%(ext)s",
+            f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}-%(format_id)s.%(ext)s",
             url,
         ]
         + (["--download-sections", f"*{time_range}"] if time_range else []),
@@ -441,6 +441,10 @@ def _yt_dlp_fetch(
                     f"yt-dlp error {proc.returncode}"
                 )
             yt_dlp_info = json.loads(stdout)
+            if "requested_downloads" not in yt_dlp_info:
+                raise discord.ext.commands.CommandError(
+                    f"yt-dlp couldn't download any files"
+                )
 
             input_codec_v = None
             input_filename_v = None
@@ -448,10 +452,10 @@ def _yt_dlp_fetch(
             input_bitrate_v = None
             input_bitrate_a = None
             for d in yt_dlp_info["requested_downloads"]:
-                if input_filename_v is None and d["vcodec"] != "none":
+                if input_filename_v is None and "vcodec" in d and d["vcodec"] != "none":
                     input_filename_v = d["filepath"]
                     input_codec_v = d["vcodec"]
-                    if d["acodec"] != "none":
+                    if "acodec" in d and d["acodec"] != "none":
                         input_bitrate_v = (
                             d["tbr"] * 1000 if "tbr" in d else 8 * max_video_dl_size
                         )
@@ -463,8 +467,11 @@ def _yt_dlp_fetch(
                 elif (
                     input_filename_a is None
                     and input_bitrate_a is None
-                    and d["vcodec"] == "none"
-                    and d["acodec"] != "none"
+                    and ("vcodec" not in d or d["vcodec"] == "none")
+                    and (
+                        ("acodec" in d and d["acodec"] != "none")
+                        or ("audio_ext" in d and d["audio_ext"] != "none")
+                    )
                 ):
                     input_filename_a = d["filepath"]
                     input_bitrate_a = (
