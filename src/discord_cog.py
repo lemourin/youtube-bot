@@ -428,10 +428,10 @@ def _yt_dlp_fetch(
             f"bv[filesize_approx<{max_video_dl_size}],ba[filesize_approx<{max_audio_dl_size}]",
             f"b[filesize<{max_video_dl_size + max_audio_dl_size}]",
             f"b[filesize_approx<{max_video_dl_size + max_audio_dl_size}]",
-            f"wv[{supported_vcodec}],wa",
-            f"w[{supported_vcodec}]",
-            "wv,wa",
-            "w",
+            f"bv[{supported_vcodec}],ba",
+            f"b[{supported_vcodec}]",
+            "bv,ba",
+            "b",
             f"bv[filesize<{max_video_size}][{supported_vcodec}]",
             f"bv[filesize_approx<{max_video_size}][{supported_vcodec}]",
             f"bv[filesize<{max_video_dl_size}][{supported_vcodec}]",
@@ -440,8 +440,8 @@ def _yt_dlp_fetch(
             f"bv[filesize_approx<{max_video_dl_size}]",
             f"ba[filesize<{max_audio_dl_size}]",
             f"ba[filesize_approx<{max_audio_dl_size}]",
-            "wv",
-            "wa",
+            "bv",
+            "ba",
         ]
     )
     time_range = ytdl_time_range(options)
