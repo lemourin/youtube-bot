@@ -362,6 +362,10 @@ def _content_duration_seconds(
     return duration_seconds
 
 
+def _supported_codecs():
+    return ["h264", "h265", "hvc1", "avc1", "vp09"]
+
+
 @dataclasses.dataclass
 class FetchResult:
     title: str
@@ -383,7 +387,7 @@ def _yt_dlp_fetch(
     max_video_size = 0.8 * filesize_limit
     max_video_dl_size = storage_options.attachment.max_video_dl_size
     max_audio_dl_size = storage_options.attachment.max_audio_dl_size
-    supported_vcodec = "vcodec~='^(hevc|avc|h264|h265|vp09)'"
+    supported_vcodec = f"vcodec~='^({"|".join(_supported_codecs())})'"
     format_str = "/".join(
         [
             f"bv[filesize<{max_video_size}][{supported_vcodec}],ba[filesize<{max_audio_dl_size}]",
@@ -565,7 +569,7 @@ def _needs_video_transcode(
 ):
     if (input_bitrate_v + input_bitrate_a) * duration_seconds > 8 * filesize_limit:
         return True
-    for c in ["h264", "h265", "hvc1", "avc1", "vp09"]:
+    for c in _supported_codecs():
         if vcodec.startswith(c):
             return False
     return True
