@@ -18,6 +18,8 @@ class AttachmentOptions:
     audio_bitrate: int
     min_video_bitrate: int
     max_video_bitrate: int
+    mp4_codec_a: str
+    webm_codec_a: str
 
 
 @dataclasses.dataclass

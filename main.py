@@ -47,6 +47,8 @@ ATTACHMENT_MIN_VIDEO_BITRATE = int(
 ATTACHMENT_MAX_VIDEO_BITRATE = int(
     os.environ.get("ATTACHMENT_MAX_VIDEO_BITRATE", 4_096_000)
 )
+ATTACHMENT_MP4_AUDIO_CODEC = os.environ.get("ATTACHMENT_MP4_AUDIO_CODEC", "aac")
+ATTACHMENT_WEBM_AUDIO_CODEC = os.environ.get("ATTACHMENT_WEBM_AUDIO_CODEC", "libopus")
 
 
 async def healthcheck(http: aiohttp.ClientSession) -> None:
@@ -132,6 +134,8 @@ async def main() -> None:
                             audio_bitrate=ATTACHMENT_AUDIO_BITRATE,
                             min_video_bitrate=ATTACHMENT_MIN_VIDEO_BITRATE,
                             max_video_bitrate=ATTACHMENT_MAX_VIDEO_BITRATE,
+                            mp4_codec_a=ATTACHMENT_MP4_AUDIO_CODEC,
+                            webm_codec_a=ATTACHMENT_WEBM_AUDIO_CODEC,
                         ),
                     ),
                 )

@@ -143,6 +143,7 @@ def _transcode_h264_pass_2(
     pass_log_file: str,
     bitrate_v: int,
     bitrate_a: int,
+    codec_a: str,
     graph: str | None,
 ):
     with subprocess.Popen(
@@ -173,7 +174,7 @@ def _transcode_h264_pass_2(
             "-x264-params",
             "threads=2",
             "-c:a",
-            "aac",
+            codec_a,
             "-b:a",
             f"{bitrate_a}",
         ]
@@ -242,6 +243,7 @@ def _transcode_h265_pass_2(
     pass_log_file: str,
     bitrate_v: int,
     bitrate_a: int,
+    codec_a: str,
     graph: str | None,
 ):
     with subprocess.Popen(
@@ -264,7 +266,7 @@ def _transcode_h265_pass_2(
             "-tag:v",
             "hvc1",
             "-c:a",
-            "aac",
+            codec_a,
             "-b:a",
             f"{bitrate_a}",
             "-x265-params",
@@ -531,6 +533,7 @@ def _yt_dlp_fetch(
 
 def _two_pass_transcode(
     codec_v: str,
+    codec_a: str,
     options: PlaybackOptions,
     pass_log_file: str,
     bitrate_v: int,
@@ -552,6 +555,7 @@ def _two_pass_transcode(
         pass_log_file=pass_log_file,
         bitrate_v=bitrate_v,
         bitrate_a=bitrate_a,
+        codec_a=codec_a,
         graph=audio_filter_graph(options),
     )
 
@@ -660,7 +664,7 @@ def _convert_video(
                 input_a=input_a,
                 output=output_filepath,
                 bitrate_a=bitrate_a,
-                codec_a="aac",
+                codec_a=storage_options.attachment.mp4_codec_a,
                 graph=options.filter_graph,
             )
             return output_filepath
@@ -674,6 +678,7 @@ def _convert_video(
             output_filepath = _output_filepath("mp4")
             _two_pass_transcode(
                 codec_v=dest_codec_v,
+                codec_a=storage_options.attachment.mp4_codec_a,
                 options=options,
                 pass_log_file=str(
                     pathlib.Path(storage_options.tmp_file_path) / f"{input_uuid}.log"
@@ -693,7 +698,11 @@ def _convert_video(
                 input=[input_v] + ([input_a] if input_a else []),
                 output_filepath=output_filepath,
                 bitrate_a=bitrate_a,
-                audio_codec="libopus" if format == "webm" else "aac",
+                audio_codec=(
+                    storage_options.attachment.webm_codec_a
+                    if format == "webm"
+                    else storage_options.attachment.mp4_codec_a
+                ),
                 graph=options.filter_graph,
             )
             return output_filepath
