@@ -115,7 +115,7 @@ def _transcode_h264_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
             "-threads",
             "2",
             "-x264-params",
-            "threads=2",
+            "threads=2:open-gop=0:keyint=120:min-keyint=60",
             "-an",
             "-f",
             "null",
@@ -172,7 +172,7 @@ def _transcode_h264_pass_2(
             "-threads",
             "2",
             "-x264-params",
-            "threads=2",
+            "threads=2:open-gop=0:keyint=120:min-keyint=60",
             "-c:a",
             codec_a,
             "-b:a",
@@ -216,7 +216,7 @@ def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
             "-tag:v",
             "hvc1",
             "-x265-params",
-            f"stats={pass_log_file}:pass=1:frame-threads=2:pools=4",
+            f"stats={pass_log_file}:pass=1:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
             "-an",
             "-f",
             "null",
@@ -270,7 +270,7 @@ def _transcode_h265_pass_2(
             "-b:a",
             f"{bitrate_a}",
             "-x265-params",
-            f"stats={pass_log_file}:pass=2:frame-threads=2:pools=4",
+            f"stats={pass_log_file}:pass=2:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
         ]
         + (["-af", graph] if graph else [])
         + [output]
