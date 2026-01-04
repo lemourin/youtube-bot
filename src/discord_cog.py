@@ -12,7 +12,8 @@ import discord
 import discord.ext.commands
 import validators
 from linkpreview import link_preview  # type: ignore
-from src.audio import YTDLSource, AudioTrack
+from src.discord_audio import YTDLSource
+from src.audio_util import AudioTrack
 from src.guild_state import GuildState
 from src.discord_ui import ButtonView, SelectView, View
 from src.util import (
@@ -300,8 +301,8 @@ class DiscordCog(discord.ext.commands.Cog):
             title=message_content.title,
             track_id=track_id,
             playback_options=options,
-            interaction=interaction,
             can_edit_message=False,
+            user_data=interaction,
         )
 
         await state.enqueue(voice_client, track)
@@ -754,9 +755,9 @@ class DiscordCog(discord.ext.commands.Cog):
                     title=item.name,
                     track_id=track_id,
                     playback_options=options,
-                    interaction=interaction,
                     on_enqueue=item.on_enqueue,
                     on_dequeue=item.on_dequeue,
+                    user_data=interaction,
                 )
 
                 try:

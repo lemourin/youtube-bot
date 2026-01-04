@@ -1,82 +1,46 @@
-import subprocess
-import threading
-import asyncio
-import dataclasses
 import tempfile
-import inspect
-from typing import override, Callable, Awaitable, Sequence, MutableSequence
-import io
-from concurrent.futures import Executor
-from discord.opus import Encoder as OpusEncoder
-import discord
 import zmq
-from .util import ytdl_time_range, audio_filter_graph, PlaybackOptions
-from .discord_util import add_to_embed
+import asyncio
+import subprocess
+import dataclasses
+import threading
+import inspect
+from concurrent.futures import Executor
+from typing import Callable, Awaitable, Sequence, MutableSequence, Any
+from .util import PlaybackOptions, ytdl_time_range, audio_filter_graph
 
 AUDIO_PACKET_SIZE = 3840
 
 
-class YTDLBuffer(io.BufferedIOBase):
+def _create_yt_dlp_process(
+    url: str, options: PlaybackOptions
+) -> subprocess.Popen[bytes]:
+    print(f"[ ] YTDLBuffer creating process for {url}")
+    args = [
+        "yt-dlp",
+        "-x",
+        "--cookies",
+        "cookie.txt",
+        url,
+        "-o",
+        "-",
+        "--download-sections",
+        "*from-url",
+    ]
+    range_opt = ytdl_time_range(options)
+    if range_opt:
+        args.append("--download-sections")
+        args.append(f"*{range_opt}")
+    print("[ ] yt-dlp", *args)
+    return subprocess.Popen(
+        args=args,
+        stdout=asyncio.subprocess.PIPE,
+        bufsize=1024 * 1024,
+    )
+
+
+class YTDLStreamAudio:
     def __init__(self, url: str, options: PlaybackOptions) -> None:
-        self.proc = YTDLBuffer.create_process(url, options)
-
-    @override
-    def read(self, n: int | None = None) -> bytes:
-        # print("[ ] YTDLBuffer read")
-        assert self.proc.stdout is not None
-        return self.proc.stdout.read(-1 if n is None else n)
-
-    def cleanup(self) -> None:
-        print("[ ] YTDLBuffer cleanup")
-        self.proc.terminate()
-        print("[ ] process cleaned up")
-
-    @staticmethod
-    def create_process(url: str, options: PlaybackOptions) -> subprocess.Popen[bytes]:
-        print(f"[ ] YTDLBuffer creating process for {url}")
-        args = [
-            "yt-dlp",
-            "-x",
-            # Audio options, breaks generic downloader.
-            # "-f",
-            # "bestaudio",
-            "--cookies",
-            "cookie.txt",
-            url,
-            "-o",
-            "-",
-            "--download-sections",
-            "*from-url",
-        ]
-        range_opt = ytdl_time_range(options)
-        if range_opt:
-            args.append("--download-sections")
-            args.append(f"*{range_opt}")
-        print("[ ] yt-dlp", *args)
-        return subprocess.Popen(
-            args=args,
-            stdout=asyncio.subprocess.PIPE,
-            bufsize=1024 * 1024,
-        )
-
-
-@dataclasses.dataclass
-class AudioTrack:
-    url: str
-    title: str
-    track_id: int
-    playback_options: PlaybackOptions
-    interaction: discord.Interaction
-    on_enqueue: Callable[[], Awaitable[None]] | None = None
-    on_dequeue: Callable[[], Awaitable[None]] | None = None
-    lock = asyncio.Lock()
-    on_enqueue_time: int | None = None
-    can_edit_message: bool = True
-
-
-class YTDLStreamAudio(discord.FFmpegAudio):
-    def __init__(self, url: str, options: PlaybackOptions) -> None:
-        self._buffer = YTDLBuffer(url, options)
         self._temporary_file = tempfile.NamedTemporaryFile()
 
         if not options.nightcore_factor:
@@ -86,10 +50,10 @@ class YTDLStreamAudio(discord.FFmpegAudio):
         if not options.volume:
             options.volume = 1.0
 
-        super().__init__(
-            source=self._buffer,
-            executable="ffmpeg",
+        self._read_proc = _create_yt_dlp_process(url, options)
+        self._proc = subprocess.Popen(
             args=[
+                "ffmpeg",
                 "-i",
                 "-",
                 "-f",
@@ -107,27 +71,23 @@ class YTDLStreamAudio(discord.FFmpegAudio):
                 f"azmq=b=ipc\\\\://{self._temporary_file.name},{audio_filter_graph(options)}",
                 "-",
             ],
-            stdin=subprocess.PIPE,
+            stdin=self._read_proc.stdout,
+            stdout=subprocess.PIPE,
         )
 
-    @override
-    def read(self) -> bytes:
-        ret = self._stdout.read(OpusEncoder.FRAME_SIZE)
-        if len(ret) != OpusEncoder.FRAME_SIZE:
-            return b""
-        return ret
+    def read(self, count: int) -> bytes:
+        assert self._proc.stdout is not None
+        return self._proc.stdout.read(count)
 
-    @override
     def cleanup(self) -> None:
-        try:
-            print("[ ] YTDLStreamAudio cleanup")
-            self._buffer.cleanup()
-            self._temporary_file.close()
-            super().cleanup()
-        except ValueError as e:
-            print(f"[ ] YTDLStreamAudio cleanup {e}")
-        except AttributeError as e:
-            print(f"[ ] YTDLStreamAudio cleanup {e}")
+        print("[ ] YTDLStreamAudio cleanup")
+        self._temporary_file.close()
+
+        self._proc.kill()
+        self._proc.wait()
+
+        self._read_proc.terminate()
+        self._read_proc.wait()
 
     @staticmethod
     def __send_string(socket: zmq.SyncSocket, command: str) -> None:
@@ -153,7 +113,21 @@ class YTDLStreamAudio(discord.FFmpegAudio):
                     self.__send_string(socket, f"volume@1 volume {options.volume}")
 
 
-class LazyAudioSource(discord.AudioSource):
+@dataclasses.dataclass
+class AudioTrack:
+    url: str
+    title: str
+    track_id: int
+    playback_options: PlaybackOptions
+    on_enqueue: Callable[[], Awaitable[None]] | None = None
+    on_dequeue: Callable[[], Awaitable[None]] | None = None
+    lock = asyncio.Lock()
+    on_enqueue_time: int | None = None
+    can_edit_message: bool = True
+    user_data: Any = None
+
+
+class LazyAudioSource:
     def __init__(self, track: AudioTrack) -> None:
         self.track = track
         self.source: YTDLStreamAudio | None = None
@@ -168,7 +142,6 @@ class LazyAudioSource(discord.AudioSource):
         if self.source is None:
             self.source = YTDLStreamAudio(self.track.url, self.track.playback_options)
 
-    @override
     def cleanup(self) -> None:
         with self.lock:
             if self.source:
@@ -176,12 +149,14 @@ class LazyAudioSource(discord.AudioSource):
                 self.source = None
                 self.playback_id = None
 
-    @override
-    def read(self) -> bytes:
+    def read(self, count: int) -> bytes:
         with self.lock:
             self._prefetch()
             assert self.source
-            return self.source.read()
+            data = self.source.read(count)
+            if len(data) != count:
+                return b""
+            return data
 
 
 async def _invoke(callbacks: Sequence[Callable[[], None] | Awaitable[None]]):
@@ -284,14 +259,14 @@ class YTDLQueuedStreamAudio:
 
         await _invoke(callbacks)
 
-    def read(self) -> AudioChunk:
+    def read(self, count: int) -> AudioChunk:
         with self.lock:
             # print("[ ] YTDLQueuedStreamAudio read")
             if not self.queue:
                 print("[ ] queue empty")
                 return AudioChunk(data=b"", playback_id=-1)
             source = self.queue[0]
-            c = source.read()
+            c = source.read(count)
             if source.playback_id is None:
                 self.current_playback_id += 1
                 source.playback_id = self.current_playback_id
@@ -328,15 +303,7 @@ class YTDLQueuedStreamAudio:
                 return None
             return self.queue[0].track.track_id
 
-    async def __update_embed(
-        self, interaction: discord.Interaction, options: PlaybackOptions
-    ) -> None:
-        message = await interaction.original_response()
-        embed = message.embeds[0]
-        add_to_embed(embed, options)
-        await interaction.edit_original_response(embeds=message.embeds)
-
-    def set_options(self, options: PlaybackOptions) -> None:
+    def set_options(self, options: PlaybackOptions, update: Callable[[AudioTrack], None]) -> None:
         with self.lock:
             if not self.queue:
                 return
@@ -344,10 +311,7 @@ class YTDLQueuedStreamAudio:
             if not queue.source:
                 return
             self.executor.submit(queue.source.set_options, options)
-            asyncio.ensure_future(
-                self.__update_embed(queue.track.interaction, options),
-                loop=self.main_loop,
-            )
+            update(queue.track)
 
     def current_position(self, track_id: int) -> int | None:
         with self.lock:
@@ -370,13 +334,16 @@ class YTDLQueuedStreamAudio:
         return callbacks
 
 
-class BufferedAudioSource(discord.AudioSource):
-    def __init__(self, source: YTDLQueuedStreamAudio, executor: Executor) -> None:
+class BufferedAudioSource:
+    def __init__(
+        self, source: YTDLQueuedStreamAudio, executor: Executor, chunk_size: int
+    ) -> None:
         self.done = False
         self.max_chunk_count = 256
         self.preload_chunk_count = 128
         self.source = source
         self.executor = executor
+        self.chunk_size = chunk_size
         self.chunks: list[AudioChunk] = []
         self.access_sem = threading.Lock()
         self.chunk_sem = threading.Semaphore(value=0)
@@ -395,7 +362,6 @@ class BufferedAudioSource(discord.AudioSource):
         with self.access_sem:
             return self.done
 
-    @override
     def read(self) -> bytes:
         # print("[ ] BufferedAudioSource read")
         if not self.chunk_sem.acquire(timeout=0.010):
@@ -421,7 +387,6 @@ class BufferedAudioSource(discord.AudioSource):
         self.access_sem.release()
         return c.data
 
-    @override
     def cleanup(self) -> None:
         print("[ ] BufferedAudioSource cleanup")
         with self.access_sem:
@@ -441,7 +406,7 @@ class BufferedAudioSource(discord.AudioSource):
                     self.chunk_sem.release(chunks_pending + 1)
                     break
 
-            chunk = self.source.read()
+            chunk = self.source.read(self.chunk_size)
             if len(chunk.data) == 0:
                 self.chunk_sem.release(chunks_pending + 1)
                 self.done = True
@@ -453,11 +418,3 @@ class BufferedAudioSource(discord.AudioSource):
                 if len(self.chunks) >= self.preload_chunk_count:
                     self.chunk_sem.release(chunks_pending)
                     chunks_pending = 0
-
-
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(
-        self, queue: YTDLQueuedStreamAudio, volume: float, executor: Executor
-    ) -> None:
-        self.buffered_audio = BufferedAudioSource(queue, executor)
-        super().__init__(self.buffered_audio, volume)

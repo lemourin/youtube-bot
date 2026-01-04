@@ -4,8 +4,9 @@ from typing import cast
 import time
 import discord
 import discord.ext.commands
-from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack
+from src.discord_audio import YTDLSource, update_playback_options
 from src.discord_ui import View, ButtonView
+from src.audio_util import AudioTrack, YTDLQueuedStreamAudio
 from .util import PlaybackOptions
 from .discord_util import add_to_embed
 
@@ -32,17 +33,19 @@ class GuildState:
         self._cb_lock = asyncio.Lock()
 
     async def _on_enqueued(self, track: AudioTrack) -> None:
+        interaction = cast(discord.Interaction, track.user_data)
         async with track.lock:
             print(f"[ ] enqueued {track.title}")
             if track.on_enqueue:
                 await track.on_enqueue()
             if track.can_edit_message:
-                await track.interaction.edit_original_response(
-                    view=self.new_playback_control_view(track.interaction, track)
+                await interaction.edit_original_response(
+                    view=self.new_playback_control_view(interaction, track)
                 )
             track.on_enqueue_time = int(time.time() * 1000)
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
+        interaction = cast(discord.Interaction, track.user_data)
         min_enqueue_time = 3000
         async with track.lock:
             if track.on_enqueue_time:
@@ -54,13 +57,13 @@ class GuildState:
             if track.on_dequeue:
                 await track.on_dequeue()
             if track.can_edit_message:
-                current = await track.interaction.original_response()
+                current = await interaction.original_response()
                 embed = current.embeds[0]
                 embed.clear_fields()
                 add_to_embed(embed, track.playback_options)
-                await track.interaction.edit_original_response(
+                await interaction.edit_original_response(
                     embed=embed,
-                    view=self.new_playback_control_view(track.interaction, track),
+                    view=self.new_playback_control_view(interaction, track),
                 )
 
     async def enqueue(
@@ -80,7 +83,7 @@ class GuildState:
         await self._start(voice_client)
 
     async def _start(self, voice_client: discord.VoiceClient) -> None:
-        if self._source and not self._source.buffered_audio.is_done():
+        if self._source and not self._source.is_done():
             return
 
         print("[ ] voice client not playing, starting")
@@ -129,7 +132,7 @@ class GuildState:
         if self._source is not None and (
             track_id is None or self._queue.current_track_id() == track_id
         ):
-            self._source.buffered_audio.drain()
+            self._source.drain()
         await self._queue.skip(track_id)
 
     async def play_now(
@@ -139,7 +142,7 @@ class GuildState:
     ) -> None:
         async with self._queue_lock:
             if self._source is not None:
-                self._source.buffered_audio.drain()
+                self._source.drain()
             await self._queue.play_now(track)
             await self._start(voice_client)
 
@@ -162,7 +165,7 @@ class GuildState:
     async def set_options(self, options: PlaybackOptions) -> None:
         async with self._queue_lock:
             await asyncio.get_event_loop().run_in_executor(
-                self._executor, self._queue.set_options, options
+                self._executor, update_playback_options, self._queue, options
             )
 
     async def enqueued_tracks(self) -> list[AudioTrack]:
