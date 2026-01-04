@@ -10,7 +10,8 @@ from concurrent.futures import Executor
 from discord.opus import Encoder as OpusEncoder
 import discord
 import zmq
-from .util import add_to_embed, ytdl_time_range, audio_filter_graph, PlaybackOptions
+from .util import ytdl_time_range, audio_filter_graph, PlaybackOptions
+from .discord_util import add_to_embed
 
 AUDIO_PACKET_SIZE = 3840
 

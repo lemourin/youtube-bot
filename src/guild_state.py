@@ -6,7 +6,8 @@ import discord
 import discord.ext.commands
 from src.audio import YTDLQueuedStreamAudio, YTDLSource, AudioTrack
 from src.discord_ui import View, ButtonView
-from .util import add_to_embed, PlaybackOptions
+from .util import PlaybackOptions
+from .discord_util import add_to_embed
 
 AUDIO_BITRATE = 320
 

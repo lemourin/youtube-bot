@@ -11,8 +11,9 @@ import discord.ext.commands
 from dotenv import load_dotenv
 import googleapiclient.discovery  # type: ignore
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
-from src.discord_cog import DiscordCog, JellyfinLibraryClient
+from src.discord_cog import DiscordCog
 from src.util import FileStorageOptions, AttachmentOptions
+from src.jellyfin_util import JellyfinLibraryClient
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 
