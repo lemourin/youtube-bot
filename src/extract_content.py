@@ -371,17 +371,17 @@ def _yt_dlp_fetch(
     supported_vcodec = f"vcodec~='^({"|".join(_supported_codecs())})'"
     format_str = "/".join(
         [
-            f"bv[filesize<{max_video_size}][{supported_vcodec}],ba[filesize<{max_audio_dl_size}]",
-            f"bv[filesize_approx<{max_video_size}][{supported_vcodec}],ba[filesize_approx<{max_audio_dl_size}]",
+            f"bv[filesize<{max_video_size}][{supported_vcodec}]+ba[filesize<{max_audio_dl_size}]",
+            f"bv[filesize_approx<{max_video_size}][{supported_vcodec}]+ba[filesize_approx<{max_audio_dl_size}]",
             f"b[filesize<{max_video_size}][{supported_vcodec}]",
             f"b[filesize_approx<{max_video_size}][{supported_vcodec}]",
-            f"bv[filesize<{max_video_dl_size}],ba[filesize<{max_audio_dl_size}]",
-            f"bv[filesize_approx<{max_video_dl_size}],ba[filesize_approx<{max_audio_dl_size}]",
+            f"bv[filesize<{max_video_dl_size}]+ba[filesize<{max_audio_dl_size}]",
+            f"bv[filesize_approx<{max_video_dl_size}]+ba[filesize_approx<{max_audio_dl_size}]",
             f"b[filesize<{max_video_dl_size + max_audio_dl_size}]",
             f"b[filesize_approx<{max_video_dl_size + max_audio_dl_size}]",
-            f"bv[{supported_vcodec}],ba",
+            f"bv[{supported_vcodec}]+ba",
             f"b[{supported_vcodec}]",
-            "bv,ba",
+            "bv+ba",
             "b",
             f"bv[filesize<{max_video_size}][{supported_vcodec}]",
             f"bv[filesize_approx<{max_video_size}][{supported_vcodec}]",
