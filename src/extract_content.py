@@ -703,6 +703,7 @@ def extract_content(
             input_v=input_filename_v,
             input_a=input_filename_a,
         )
+        extension = pathlib.Path(output_filepath).suffix[1:]
 
         if storage_options.url_path:
             url = f"{storage_options.url_path}{os.path.basename(output_filepath)}"
