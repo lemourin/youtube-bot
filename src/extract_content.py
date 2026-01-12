@@ -95,7 +95,7 @@ def _transcode_h264_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg encode pass 1 deadline exceeded")
+            raise ExtractContentException("ffmpeg encode pass 1 deadline exceeded")
 
 
 def _transcode_h264_pass_2(
@@ -152,7 +152,7 @@ def _transcode_h264_pass_2(
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg encode pass 2 deadline exceeded")
+            raise ExtractContentException("ffmpeg encode pass 2 deadline exceeded")
 
 
 def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
@@ -191,7 +191,7 @@ def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg encode pass 1 deadline exceeded")
+            raise ExtractContentException("ffmpeg encode pass 1 deadline exceeded")
 
 
 def _transcode_h265_pass_2(
@@ -241,7 +241,7 @@ def _transcode_h265_pass_2(
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg encode pass 2 deadline exceeded")
+            raise ExtractContentException("ffmpeg encode pass 2 deadline exceeded")
 
 
 def _transcode_webp(input: str, output: str, bitrate_v: int):
@@ -272,7 +272,7 @@ def _transcode_webp(input: str, output: str, bitrate_v: int):
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg webp transcode deadline exceeded")
+            raise ExtractContentException("ffmpeg webp transcode deadline exceeded")
 
 
 def _transcode_audio(
@@ -312,7 +312,7 @@ def _transcode_audio(
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg transcode deadline exceeded")
+            raise ExtractContentException("ffmpeg transcode deadline exceeded")
 
 
 def _ffprobe_media(url: str):
@@ -340,7 +340,7 @@ def _ffprobe_media(url: str):
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffprobe deadline exceeded")
+            raise ExtractContentException("ffprobe deadline exceeded")
 
 
 def _supported_codecs():
@@ -477,7 +477,7 @@ def _yt_dlp_fetch(
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"yt-dlp fetch deadline exceeded")
+            raise ExtractContentException("yt-dlp fetch deadline exceeded")
 
 
 def _two_pass_transcode(
@@ -546,7 +546,7 @@ def _remux_video(
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait()
-            raise ExtractContentException(f"ffmpeg remux deadline exceeded")
+            raise ExtractContentException("ffmpeg remux deadline exceeded")
 
 
 def _needs_video_transcode(
@@ -653,7 +653,7 @@ def _convert_video(
                 graph=options.filter_graph,
             )
             return output_filepath
-    except:
+    except BaseException:
         if output_filepath and os.path.exists(output_filepath):
             os.remove(output_filepath)
         raise
@@ -713,7 +713,7 @@ def extract_content(
                 title=title,
                 inline_attachment=InlineAttachment(content_path=output_filepath, ext=extension),  # type: ignore
             )
-    except:
+    except BaseException:
         if output_filepath and os.path.exists(output_filepath):
             os.remove(output_filepath)
         raise

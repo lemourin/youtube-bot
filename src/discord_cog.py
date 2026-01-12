@@ -1,7 +1,6 @@
 import asyncio
 from typing import cast, Dict, Any, Tuple
 import io
-from functools import reduce
 import sys
 import functools
 from urllib.parse import urlparse
