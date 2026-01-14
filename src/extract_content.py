@@ -595,7 +595,7 @@ def _convert_video(
         if extension == "webp":
             if input_v is None:
                 raise ExtractContentException("Can't make a GIF with no video.")
-            output_filepath = _output_filepath("webm")
+            output_filepath = _output_filepath("webp")
             _transcode_webp(
                 input=input_v,
                 output=output_filepath,
