@@ -630,7 +630,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     await interaction.followup.send(content=attachment.url)
                 else:
                     await interaction.followup.send("Failed to extract a video.")
-        except discord.ext.commands.CommandError as e:
+        except discord.errors.DiscordException as e:
             await interaction.followup.send(e.args[0])
         except ExtractContentException as e:
             await interaction.followup.send(e.args[0])
