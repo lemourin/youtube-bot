@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp",
     "discord.py",
+    "davey",
     "python-dotenv",
     "yt-dlp[default]",
     "jellyfin-apiclient-python",
