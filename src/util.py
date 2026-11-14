@@ -1,8 +1,9 @@
+import asyncio
+import dataclasses
+import json
 import re
 import subprocess
-import asyncio
-import json
-import dataclasses
+
 import aiohttp
 
 

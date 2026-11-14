@@ -1,4 +1,5 @@
 import dataclasses
+
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
 
 

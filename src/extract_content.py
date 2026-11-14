@@ -1,16 +1,19 @@
+import dataclasses
+import functools
+import json
+import operator
+import os
+import pathlib
 import subprocess
 import sys
-import os
-import json
-import dataclasses
-import pathlib
 import uuid
 from types import TracebackType
+
 from .util import (
-    PlaybackOptions,
     FileStorageOptions,
-    ytdl_time_range,
+    PlaybackOptions,
     audio_filter_graph,
+    ytdl_time_range,
 )
 
 
@@ -111,7 +114,7 @@ def _transcode_h264_pass_2(
         args=[
             "ffmpeg",
         ]
-        + sum((["-i", path] for path in input), [])
+        + functools.reduce(operator.iadd, (["-i", path] for path in input), [])
         + [
             "-f",
             "mp4",
@@ -205,7 +208,7 @@ def _transcode_h265_pass_2(
 ):
     with subprocess.Popen(
         args=["ffmpeg"]
-        + sum((["-i", path] for path in input), [])
+        + functools.reduce(operator.iadd, (["-i", path] for path in input), [])
         + [
             "-f",
             "mp4",
@@ -523,7 +526,7 @@ def _remux_video(
 ):
     with subprocess.Popen(
         args=["ffmpeg"]
-        + sum((["-i", path] for path in input), [])
+        + functools.reduce(operator.iadd, (["-i", path] for path in input), [])
         + [
             "-f",
             format,

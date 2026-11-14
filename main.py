@@ -1,19 +1,21 @@
 #!/usr/bin/env python
 
 import asyncio
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-import logging
+
 import aiohttp
 import aiohttp.web
 import discord
 import discord.ext.commands
-from dotenv import load_dotenv
 import googleapiclient.discovery  # type: ignore
+from dotenv import load_dotenv
 from jellyfin_apiclient_python import JellyfinClient  # type: ignore
+
 from src.discord_cog import DiscordCog
-from src.util import FileStorageOptions, AttachmentOptions
 from src.jellyfin_util import JellyfinLibraryClient
+from src.util import AttachmentOptions, FileStorageOptions
 
 load_dotenv(dotenv_path=os.environ.get("ENV_FILE"))
 
@@ -41,12 +43,12 @@ ATTACHMENT_MAX_VIDEO_DL_SIZE = int(
 ATTACHMENT_MAX_AUDIO_DL_SIZE = int(
     os.environ.get("ATTACHMENT_MAX_AUDIO_DL_SIZE", str(64 * 1024 * 1024))
 )
-ATTACHMENT_AUDIO_BITRATE = int(os.environ.get("ATTACHMENT_AUDIO_BITRATE", 64_000))
+ATTACHMENT_AUDIO_BITRATE = int(os.environ.get("ATTACHMENT_AUDIO_BITRATE", str(64_000)))
 ATTACHMENT_MIN_VIDEO_BITRATE = int(
-    os.environ.get("ATTACHMENT_MIN_VIDEO_BITRATE", 64_000)
+    os.environ.get("ATTACHMENT_MIN_VIDEO_BITRATE", str(64_000))
 )
 ATTACHMENT_MAX_VIDEO_BITRATE = int(
-    os.environ.get("ATTACHMENT_MAX_VIDEO_BITRATE", 4_096_000)
+    os.environ.get("ATTACHMENT_MAX_VIDEO_BITRATE", str(4_096_000))
 )
 ATTACHMENT_MP4_AUDIO_CODEC = os.environ.get("ATTACHMENT_MP4_AUDIO_CODEC", "aac")
 ATTACHMENT_WEBM_AUDIO_CODEC = os.environ.get("ATTACHMENT_WEBM_AUDIO_CODEC", "libopus")

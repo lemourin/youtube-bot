@@ -1,8 +1,11 @@
-import discord
-import html
-from .util import PlaybackOptions, iso8601_to_unix_timestamp, yt_best_thumbnail_url
-from typing import Any, Callable, Awaitable
 import dataclasses
+import html
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+import discord
+
+from .util import PlaybackOptions, iso8601_to_unix_timestamp, yt_best_thumbnail_url
 
 
 @dataclasses.dataclass

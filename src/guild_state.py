@@ -1,14 +1,17 @@
 import asyncio
+import time
 from concurrent.futures import Executor
 from typing import cast
-import time
+
 import discord
 import discord.ext.commands
-from src.discord_audio import YTDLSource, update_playback_options
-from src.discord_ui import View, ButtonView
+
 from src.audio_util import AudioTrack, YTDLQueuedStreamAudio
-from .util import PlaybackOptions
+from src.discord_audio import YTDLSource, update_playback_options
+from src.discord_ui import ButtonView, View
+
 from .discord_util import add_to_embed
+from .util import PlaybackOptions
 
 AUDIO_BITRATE = 320
 

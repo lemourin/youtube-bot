@@ -1,39 +1,41 @@
 import asyncio
-from typing import cast, Dict, Any, Tuple
+import functools
 import io
 import sys
-import functools
-from urllib.parse import urlparse
 from concurrent.futures import Executor, ThreadPoolExecutor
+from typing import Any, cast
+from urllib.parse import urlparse
+
 import aiohttp
 import aiohttp.web
 import discord
 import discord.ext.commands
 import validators
 from linkpreview import link_preview  # type: ignore
-from src.discord_audio import YTDLSource
+
 from src.audio_util import AudioTrack
-from src.guild_state import GuildState
+from src.discord_audio import YTDLSource
 from src.discord_ui import ButtonView, SelectView, View
-from src.util import (
-    read_at_most,
-    yt_video_data_from_url,
-    trim_option_text,
-    duration_to_str,
-    PlaybackOptions,
-    FileStorageOptions,
-)
 from src.discord_util import (
+    MessageContent,
+    SearchEntry,
     add_to_embed,
     yt_item_to_search_item,
-    SearchEntry,
-    MessageContent,
-)
-from src.jellyfin_util import (
-    jf_best_thumbnail_url,
-    JellyfinLibraryClient,
 )
 from src.extract_content import ExtractContentException, extract_content
+from src.guild_state import GuildState
+from src.jellyfin_util import (
+    JellyfinLibraryClient,
+    jf_best_thumbnail_url,
+)
+from src.util import (
+    FileStorageOptions,
+    PlaybackOptions,
+    duration_to_str,
+    read_at_most,
+    trim_option_text,
+    yt_video_data_from_url,
+)
 
 
 class DiscordCog(discord.ext.commands.Cog):
@@ -52,7 +54,7 @@ class DiscordCog(discord.ext.commands.Cog):
         self.http = http
         self.discord_admin_id = discord_admin_id
         self.file_storage_options = file_storage_options
-        self.state: Dict[int, GuildState] = {}
+        self.state: dict[int, GuildState] = {}
         self.jellyfin_client = jellyfin_client
         self.youtube_client = youtube_client
         self.next_track_id = 0
@@ -412,8 +414,7 @@ class DiscordCog(discord.ext.commands.Cog):
                     )
                 )
         for d in await asyncio.gather(*coros):
-            for e in d["Items"]:
-                items.append(e)
+            items += list(d["Items"])
 
         ids = set()
         filtered = []
@@ -585,9 +586,9 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         await interaction.response.defer()
         try:
-            if extension == "mp4" and video_codec not in ["h264", "h265"]:
-                raise discord.ext.commands.CommandError("Video codec not supported.")
-            elif extension == "webp" and video_codec not in ["webp"]:
+            if (extension == "mp4" and video_codec not in ["h264", "h265"]) or (
+                extension == "webp" and video_codec not in ["webp"]
+            ):
                 raise discord.ext.commands.CommandError("Video codec not supported.")
 
             filesize_limit = (
@@ -653,7 +654,7 @@ class DiscordCog(discord.ext.commands.Cog):
         message_content: MessageContent,
         options: PlaybackOptions,
         image: io.BytesIO | str | None,
-    ) -> Tuple[discord.Embed, list[discord.File]]:
+    ) -> tuple[discord.Embed, list[discord.File]]:
         embed = discord.Embed(
             title=message_content.title,
             url=message_content.url,
@@ -682,7 +683,7 @@ class DiscordCog(discord.ext.commands.Cog):
 
     async def __create_embed(
         self, message_content: MessageContent, options: PlaybackOptions
-    ) -> Tuple[discord.Embed, list[discord.File]]:
+    ) -> tuple[discord.Embed, list[discord.File]]:
         image: io.BytesIO | None = None
         if (
             message_content.artwork_url
@@ -739,12 +740,12 @@ class DiscordCog(discord.ext.commands.Cog):
                 if dismissed:
                     return
 
-                item = [
+                item = next(
                     entry
                     for index, entry in enumerate(entries)
                     if trim_option_text(option_label(index, entry))
                     == select.selected_value()
-                ][0]
+                )
 
                 track_id = self.next_track_id
                 self.next_track_id += 1
@@ -968,9 +969,11 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.__ensure_playing(interaction)
         for e in self.bot.voice_clients:
             voice_client = cast(discord.VoiceClient, e)
-            if voice_client.guild.id == interaction.guild_id:
-                if voice_client.source is not None:
-                    voice_client.stop()
+            if (
+                voice_client.guild.id == interaction.guild_id
+                and voice_client.source is not None
+            ):
+                voice_client.stop()
 
     async def leave(self, interaction: discord.Interaction) -> None:
         print("[ ] leave")

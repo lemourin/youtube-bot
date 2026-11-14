@@ -1,13 +1,16 @@
-import tempfile
-import zmq
 import asyncio
-import subprocess
 import dataclasses
-import threading
 import inspect
+import subprocess
+import tempfile
+import threading
+from collections.abc import Awaitable, Callable, MutableSequence, Sequence
 from concurrent.futures import Executor
-from typing import Callable, Awaitable, Sequence, MutableSequence, Any
-from .util import PlaybackOptions, ytdl_time_range, audio_filter_graph
+from typing import Any
+
+import zmq
+
+from .util import PlaybackOptions, audio_filter_graph, ytdl_time_range
 
 AUDIO_PACKET_SIZE = 3840
 
@@ -41,8 +44,6 @@ def _create_yt_dlp_process(
 
 class YTDLStreamAudio:
     def __init__(self, url: str, options: PlaybackOptions) -> None:
-        self._temporary_file = tempfile.NamedTemporaryFile()
-
         if not options.nightcore_factor:
             options.nightcore_factor = 1.0
         if not options.bassboost_factor:
@@ -50,30 +51,36 @@ class YTDLStreamAudio:
         if not options.volume:
             options.volume = 1.0
 
-        self._read_proc = _create_yt_dlp_process(url, options)
-        self._proc = subprocess.Popen(
-            args=[
-                "ffmpeg",
-                "-i",
-                "-",
-                "-f",
-                "s16le",
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-                "-blocksize",
-                "8192",
-                "-vn",
-                "-loglevel",
-                "error",
-                "-af",
-                f"azmq=b=ipc\\\\://{self._temporary_file.name},{audio_filter_graph(options)}",
-                "-",
-            ],
-            stdin=self._read_proc.stdout,
-            stdout=subprocess.PIPE,
-        )
+        try:
+            self._temporary_file = tempfile.NamedTemporaryFile()  # noqa: SIM115
+            self._read_proc = _create_yt_dlp_process(url, options)
+            self._proc = subprocess.Popen(
+                args=[
+                    "ffmpeg",
+                    "-i",
+                    "-",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-blocksize",
+                    "8192",
+                    "-vn",
+                    "-loglevel",
+                    "error",
+                    "-af",
+                    f"azmq=b=ipc\\\\://{self._temporary_file.name},{audio_filter_graph(options)}",
+                    "-",
+                ],
+                stdin=self._read_proc.stdout,
+                stdout=subprocess.PIPE,
+            )
+        except Exception:
+            if self._temporary_file:
+                self._temporary_file.close()
+            raise
 
     def read(self, count: int) -> bytes:
         assert self._proc.stdout is not None
@@ -303,7 +310,9 @@ class YTDLQueuedStreamAudio:
                 return None
             return self.queue[0].track.track_id
 
-    def set_options(self, options: PlaybackOptions, update: Callable[[AudioTrack], None]) -> None:
+    def set_options(
+        self, options: PlaybackOptions, update: Callable[[AudioTrack], None]
+    ) -> None:
         with self.lock:
             if not self.queue:
                 return

@@ -1,11 +1,13 @@
 import asyncio
 from concurrent.futures import Executor
-from discord.opus import Encoder as OpusEncoder
-import discord
 from typing import cast, override
-from .util import PlaybackOptions
+
+import discord
+from discord.opus import Encoder as OpusEncoder
+
+from .audio_util import AudioTrack, BufferedAudioSource, YTDLQueuedStreamAudio
 from .discord_util import add_to_embed
-from .audio_util import YTDLQueuedStreamAudio, BufferedAudioSource, AudioTrack
+from .util import PlaybackOptions
 
 AUDIO_PACKET_SIZE = 3840
 

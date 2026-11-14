@@ -1,4 +1,6 @@
-from typing import override, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import override
+
 import discord
 
 
