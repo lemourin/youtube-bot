@@ -411,7 +411,11 @@ def _yt_dlp_fetch(
             f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}-%(format_id)s.%(ext)s",
             url,
         ]
-        + (["--download-sections", f"*{time_range}"] if time_range else []),
+        + (
+            ["--force-keyframes-at-cuts", "--download-sections", f"*{time_range}"]
+            if time_range
+            else []
+        ),
         stdout=subprocess.PIPE,
         text=True,
     ) as proc:
