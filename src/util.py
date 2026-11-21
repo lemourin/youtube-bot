@@ -118,7 +118,7 @@ def audio_filter_graph(options: PlaybackOptions) -> str | None:
             f"rubberband@1=tempo={options.nightcore_factor}:pitch={options.nightcore_factor}"
         )
 
-    if options.bassboost_factor:
+    if options.bassboost_factor is not None:
         filter_graph.append(f"bass@1=g={options.bassboost_factor}")
 
     if options.volume is not None:

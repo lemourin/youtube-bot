@@ -108,7 +108,7 @@ class YTDLStreamAudio:
     def __send_string(socket: zmq.SyncSocket, command: str) -> None:
         socket.send_string(command)
         response = socket.recv_string()
-        if response != "0 Undefined error: 0":
+        if not response.startswith("0 "):
             raise RuntimeError(f"Failed to send zmq command. {response}")
 
     def set_options(self, options: PlaybackOptions) -> None:
