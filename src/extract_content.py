@@ -158,6 +158,12 @@ def _transcode_h264_pass_2(
             raise ExtractContentException("ffmpeg encode pass 2 deadline exceeded")
 
 
+def _escape_path(value: str) -> str:
+    if os.name == "nt":
+        return pathlib.Path(value).as_posix().replace("\\", "\\\\").replace(":", "\\:")
+    return value
+
+
 def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
     with subprocess.Popen(
         args=[
@@ -178,7 +184,7 @@ def _transcode_h265_pass_1(input_v: str, pass_log_file: str, bitrate_v: int):
             "-tag:v",
             "hvc1",
             "-x265-params",
-            f"stats={pass_log_file}:pass=1:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
+            f"stats={_escape_path(pass_log_file)}:pass=1:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
             "-an",
             "-f",
             "null",
@@ -230,7 +236,7 @@ def _transcode_h265_pass_2(
             "-b:a",
             f"{bitrate_a}",
             "-x265-params",
-            f"stats={pass_log_file}:pass=2:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
+            f"stats={_escape_path(pass_log_file)}:pass=2:frame-threads=2:pools=4:open-gop=0:keyint=120:min-keyint=60",
         ]
         + (["-af", graph] if graph else [])
         + [output]
@@ -412,13 +418,13 @@ def _yt_dlp_fetch(
             "--no-simulate",
             "-o",
             f"{pathlib.Path(storage_options.tmp_file_path) / str(uuid)}-%(format_id)s.%(ext)s",
-            url,
         ]
         + (
             ["--force-keyframes-at-cuts", "--download-sections", f"*{time_range}"]
             if time_range
             else []
-        ),
+        )
+        + ["--", url],
         stdout=subprocess.PIPE,
         text=True,
     ) as proc:
@@ -726,5 +732,7 @@ def extract_content(
         raise
     finally:
         for path in os.scandir(storage_options.tmp_file_path):
-            if str(input_uuid) in path.path and path.path != output_filepath:
+            if str(input_uuid) in path.path and (
+                not output_filepath or not os.path.samefile(path.path, output_filepath)
+            ):
                 os.remove(path)

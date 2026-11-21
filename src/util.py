@@ -88,7 +88,7 @@ def yt_best_thumbnail_url(item: dict) -> str | None:
 
 def yt_video_data_from_url(url: str) -> dict | None:
     with subprocess.Popen(
-        args=["yt-dlp", "--cookies", "cookie.txt", "-J", url],
+        args=["yt-dlp", "--cookies", "cookie.txt", "-J", "--", url],
         stdout=asyncio.subprocess.PIPE,
     ) as process:
         assert process.stdout

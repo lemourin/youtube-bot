@@ -24,7 +24,6 @@ def _create_yt_dlp_process(
         "-x",
         "--cookies",
         "cookie.txt",
-        url,
         "-o",
         "-",
         "--download-sections",
@@ -34,6 +33,7 @@ def _create_yt_dlp_process(
     if range_opt:
         args.append("--download-sections")
         args.append(f"*{range_opt}")
+    args += ["--", url]
     print("[ ] yt-dlp", *args)
     return subprocess.Popen(
         args=args,

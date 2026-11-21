@@ -537,6 +537,7 @@ class DiscordCog(discord.ext.commands.Cog):
         volume: int | None,
         video_codec: str | None,
     ) -> None:
+        await self.__authorize_options(interaction, filter_graph)
         await self.__attach(
             interaction,
             url,
@@ -584,6 +585,11 @@ class DiscordCog(discord.ext.commands.Cog):
         extension: str = "mp4",
         video_codec: str = "h265",
     ) -> None:
+        if not validators.url(url):
+            await interaction.response.send_message(
+                "Invalid url.", ephemeral=True, delete_after=5
+            )
+            return
         await interaction.response.defer()
         try:
             if (extension == "mp4" and video_codec not in ["h264", "h265"]) or (
@@ -835,6 +841,9 @@ class DiscordCog(discord.ext.commands.Cog):
             f"```{message}```" if message else "Empty.", ephemeral=True, delete_after=5
         )
 
+    def cog_check(self, ctx: discord.ext.commands.Context) -> bool:
+        return ctx.author.id == self.discord_admin_id
+
     @discord.ext.commands.command()
     async def sync(self, ctx: discord.ext.commands.Context) -> None:
         print("[ ] sync")
@@ -986,6 +995,11 @@ class DiscordCog(discord.ext.commands.Cog):
 
     async def die(self, interaction: discord.Interaction) -> None:
         print("[ ] die")
+        if interaction.user.id != self.discord_admin_id:
+            await interaction.response.send_message(
+                "Not allowed.", ephemeral=True, delete_after=5
+            )
+            return
         await interaction.response.send_message(
             "About to die.", ephemeral=True, delete_after=5
         )
