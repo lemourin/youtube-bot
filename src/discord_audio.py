@@ -21,7 +21,9 @@ def update_playback_options(queue: YTDLQueuedStreamAudio, options: PlaybackOptio
 
     def on_update(track: AudioTrack):
         interaction = cast(discord.Interaction, track.user_data)
-        asyncio.ensure_future(update_embed(interaction, options), loop=queue.main_loop)
+        asyncio.run_coroutine_threadsafe(
+            update_embed(interaction, options), queue.main_loop
+        )
 
     queue.set_options(options, on_update)
 

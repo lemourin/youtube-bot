@@ -6,7 +6,6 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
-import aiohttp.web
 import discord
 import discord.ext.commands
 import googleapiclient.discovery  # type: ignore
@@ -38,7 +37,7 @@ FILE_URL_PATH = os.environ.get("FILE_URL_PATH")
 TMP_FILE_PATH = os.environ.get("TMP_FILE_PATH", "./tmp/")
 ATTACHMENT_MAX_SIZE = os.environ.get("ATTACHMENT_MAX_SIZE")
 ATTACHMENT_MAX_VIDEO_DL_SIZE = int(
-    os.environ.get("ATTACHMENT_MAX_VIDEO_DL_SIZE", str(128 * 1024 * 1924))
+    os.environ.get("ATTACHMENT_MAX_VIDEO_DL_SIZE", str(128 * 1024 * 1024))
 )
 ATTACHMENT_MAX_AUDIO_DL_SIZE = int(
     os.environ.get("ATTACHMENT_MAX_AUDIO_DL_SIZE", str(64 * 1024 * 1024))
@@ -61,7 +60,7 @@ async def healthcheck(http: aiohttp.ClientSession) -> None:
         try:
             async with http.get(HEALTHCHECK_ADDRESS) as response:
                 await response.text()
-        except aiohttp.web.HTTPException as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             print(f"[ ] health check error {e}")
         await asyncio.sleep(60)
 

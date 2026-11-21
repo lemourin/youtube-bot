@@ -1,4 +1,3 @@
-import asyncio
 import dataclasses
 import json
 import re
@@ -89,13 +88,18 @@ def yt_best_thumbnail_url(item: dict) -> str | None:
 def yt_video_data_from_url(url: str) -> dict | None:
     with subprocess.Popen(
         args=["yt-dlp", "--cookies", "cookie.txt", "-J", "--", url],
-        stdout=asyncio.subprocess.PIPE,
-    ) as process:
-        assert process.stdout
-        data = process.stdout.read()
-        if process.wait() != 0:
+        stdout=subprocess.PIPE,
+    ) as proc:
+        try:
+            data, _ = proc.communicate(timeout=300)
+            if proc.returncode != 0:
+                return None
+            return json.loads(data)
+        except subprocess.TimeoutExpired:
+            print(f"[!] yt-dlp metadata fetch deadline exceeded for {url}")
+            proc.terminate()
+            proc.wait()
             return None
-        return json.loads(data)
 
 
 async def read_at_most(stream: aiohttp.streams.StreamReader, n: int) -> bytes:

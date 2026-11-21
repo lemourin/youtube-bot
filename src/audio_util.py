@@ -1,6 +1,8 @@
 import asyncio
 import dataclasses
 import inspect
+import os
+import pathlib
 import subprocess
 import tempfile
 import threading
@@ -13,6 +15,12 @@ import zmq
 from .util import PlaybackOptions, audio_filter_graph, ytdl_time_range
 
 AUDIO_PACKET_SIZE = 3840
+
+
+def _escape_path(value: str) -> str:
+    if os.name == "nt":
+        return pathlib.Path(value).as_posix().replace(":", "\\\\:")
+    return value
 
 
 def _create_yt_dlp_process(
@@ -71,7 +79,7 @@ class YTDLStreamAudio:
                     "-loglevel",
                     "error",
                     "-af",
-                    f"azmq=b=ipc\\\\://{self._temporary_file.name},{audio_filter_graph(options)}",
+                    f"azmq=b=ipc\\\\://{_escape_path(self._temporary_file.name)},{audio_filter_graph(options)}",
                     "-",
                 ],
                 stdin=self._read_proc.stdout,
@@ -128,7 +136,9 @@ class AudioTrack:
     playback_options: PlaybackOptions
     on_enqueue: Callable[[], Awaitable[None]] | None = None
     on_dequeue: Callable[[], Awaitable[None]] | None = None
-    lock = asyncio.Lock()
+    lock: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, init=False, repr=False, compare=False
+    )
     on_enqueue_time: int | None = None
     can_edit_message: bool = True
     user_data: Any = None
@@ -255,10 +265,9 @@ class YTDLQueuedStreamAudio:
                 e = LazyAudioSource(track)
                 self.queue.insert(0, e)
                 callbacks.append(self.on_enqueued(e.track))
-            elif position > 1:
+            else:
                 position -= 1
-                e = self.queue[position]
-                self.queue.pop(position)
+                e = self.queue.pop(position)
                 self.queue.insert(0, e)
                 callbacks.append(self.on_enqueued(e.track))
 
@@ -285,12 +294,12 @@ class YTDLQueuedStreamAudio:
                     c = c + self.zeros[len(c) :]
                 self.executor.submit(source.cleanup)
                 self.queue = self.queue[1:]
-                asyncio.ensure_future(
-                    self.on_dequeued(source.track), loop=self.main_loop
+                asyncio.run_coroutine_threadsafe(
+                    self.on_dequeued(source.track), self.main_loop
                 )
                 if len(self.queue) >= 1:
-                    asyncio.ensure_future(
-                        self.on_enqueued(self.queue[0].track), loop=self.main_loop
+                    asyncio.run_coroutine_threadsafe(
+                        self.on_enqueued(self.queue[0].track), self.main_loop
                     )
                 if len(self.queue) >= 2:
                     self.executor.submit(self.queue[1].prefetch)

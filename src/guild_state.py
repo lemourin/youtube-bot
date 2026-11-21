@@ -103,15 +103,16 @@ class GuildState:
             )
         )
 
+        source = self._source
+
         def finalizer(self: GuildState, err: Exception | None):
             if err:
                 print(f"[!] player error: {err}")
-            else:
+            if self._source is source:
                 print("[ ] finished playing")
                 self._is_playing = False
 
-        if self._is_playing:
-            voice_client.pause()
+        voice_client.stop()
         voice_client.play(
             self._source,
             signal_type="music",
@@ -240,7 +241,9 @@ class GuildState:
                 view=create_view(enable_play_now=False, enable_skip=False)
             )
             await self.skip(track.track_id)
-            await interaction.response.edit_message(view=create_view(enable_skip=False))
+            await interaction.edit_original_response(
+                view=create_view(enable_skip=False)
+            )
 
         async def on_play_now(interaction: discord.Interaction):
             if await self.current_track_id() == track.track_id:
@@ -252,7 +255,7 @@ class GuildState:
                 view=create_view(enable_play_now=False, enable_skip=False)
             )
             await self.play_now(await self.voice_client(interaction), track)
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 view=create_view(enable_play_now=False)
             )
 

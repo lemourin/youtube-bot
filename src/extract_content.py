@@ -625,7 +625,7 @@ def _convert_video(
                 output=output_filepath,
                 bitrate_a=bitrate_a,
                 codec_a=storage_options.attachment.mp4_codec_a,
-                graph=options.filter_graph,
+                graph=audio_filter_graph(options),
             )
             return output_filepath
         if _needs_video_transcode(
@@ -663,7 +663,7 @@ def _convert_video(
                     if format == "webm"
                     else storage_options.attachment.mp4_codec_a
                 ),
-                graph=options.filter_graph,
+                graph=audio_filter_graph(options),
             )
             return output_filepath
     except BaseException:

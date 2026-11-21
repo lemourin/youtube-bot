@@ -7,7 +7,6 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import aiohttp
-import aiohttp.web
 import discord
 import discord.ext.commands
 import validators
@@ -262,7 +261,10 @@ class DiscordCog(discord.ext.commands.Cog):
                     preview: Any = await asyncio.to_thread(
                         link_preview,
                         url=url,
-                        content=str(await read_at_most(data.content, 1024 * 1024)),
+                        content=(await read_at_most(data.content, 1024 * 1024)).decode(
+                            encoding=data.charset or "utf-8",
+                            errors="replace"
+                        ),
                     )
                     return MessageContent(
                         title=preview.title,
@@ -271,7 +273,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         footer=preview.site_name,
                         description=preview.description,
                     )
-            except aiohttp.web.HTTPException as e:
+            except (aiohttp.ClientError, TimeoutError) as e:
                 print(f"[ ] preview error {e}")
             return None
 
@@ -983,6 +985,9 @@ class DiscordCog(discord.ext.commands.Cog):
                 and voice_client.source is not None
             ):
                 voice_client.stop()
+        await interaction.response.send_message(
+            "Stopped.", ephemeral=True, delete_after=5
+        )
 
     async def leave(self, interaction: discord.Interaction) -> None:
         print("[ ] leave")
