@@ -262,8 +262,7 @@ class DiscordCog(discord.ext.commands.Cog):
                         link_preview,
                         url=url,
                         content=(await read_at_most(data.content, 1024 * 1024)).decode(
-                            encoding=data.charset or "utf-8",
-                            errors="replace"
+                            encoding=data.charset or "utf-8", errors="replace"
                         ),
                     )
                     return MessageContent(
@@ -804,13 +803,19 @@ class DiscordCog(discord.ext.commands.Cog):
             )
 
         async def on_reject(button_interaction: discord.Interaction):
+            nonlocal dismissed
             if interaction.user.id != button_interaction.user.id:
                 await button_interaction.response.send_message(
                     "Fuck off.", ephemeral=True, delete_after=5
                 )
                 return
-            await button_interaction.response.defer()
-            await interaction.delete_original_response()
+            async with dismissed_lock:
+                await button_interaction.response.defer()
+                if dismissed:
+                    return
+                dismissed = True
+                view.stop()
+                await interaction.delete_original_response()
 
         view.add_item(select)
         view.add_item(
