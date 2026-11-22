@@ -12,7 +12,7 @@ import discord.ext.commands
 import validators
 from linkpreview import link_preview  # type: ignore
 
-from src.audio_util import AudioTrack
+from src.audio_util import AudioTrack, PlaybackOptionsError
 from src.discord_audio import YTDLSource
 from src.discord_ui import ButtonView, SelectView, View
 from src.discord_util import (
@@ -940,11 +940,17 @@ class DiscordCog(discord.ext.commands.Cog):
             volume=effective_volume,
         )
         assert interaction.guild
-        await self.state[interaction.guild.id].set_options(options)
-        await interaction.response.send_message(
-            "Applied playback settings.",
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            applied = await self.state[interaction.guild.id].set_options(options)
+        except PlaybackOptionsError as e:
+            await interaction.followup.send(
+                f"Failed to apply playback settings: {e}", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            "Applied playback settings." if applied else "Nothing is playing.",
             ephemeral=True,
-            delete_after=5,
         )
 
     @discord.app_commands.describe(volume="Number from 0 to 200.")

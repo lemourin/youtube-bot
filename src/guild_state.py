@@ -166,9 +166,9 @@ class GuildState:
     def set_volume(self, value: float) -> None:
         self._volume = value
 
-    async def set_options(self, options: PlaybackOptions) -> None:
+    async def set_options(self, options: PlaybackOptions) -> bool:
         async with self._queue_lock:
-            await asyncio.get_event_loop().run_in_executor(
+            return await asyncio.get_running_loop().run_in_executor(
                 self._executor, update_playback_options, self._queue, options
             )
 

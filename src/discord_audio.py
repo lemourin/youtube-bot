@@ -12,7 +12,9 @@ from .util import PlaybackOptions
 AUDIO_PACKET_SIZE = 3840
 
 
-def update_playback_options(queue: YTDLQueuedStreamAudio, options: PlaybackOptions):
+def update_playback_options(
+    queue: YTDLQueuedStreamAudio, options: PlaybackOptions
+) -> bool:
     async def update_embed(interaction: discord.Interaction, options: PlaybackOptions):
         message = await interaction.original_response()
         embed = message.embeds[0]
@@ -25,7 +27,7 @@ def update_playback_options(queue: YTDLQueuedStreamAudio, options: PlaybackOptio
             update_embed(interaction, options), queue.main_loop
         )
 
-    queue.set_options(options, on_update)
+    return queue.set_options(options, on_update)
 
 
 class AudioSource(discord.AudioSource):

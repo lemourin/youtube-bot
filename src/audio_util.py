@@ -15,6 +15,11 @@ import zmq
 from .util import PlaybackOptions, audio_filter_graph, ytdl_time_range
 
 AUDIO_PACKET_SIZE = 3840
+ZMQ_TIMEOUT_MS = 1000
+
+
+class PlaybackOptionsError(Exception):
+    pass
 
 
 def _escape_path(value: str) -> str:
@@ -115,23 +120,33 @@ class YTDLStreamAudio:
         socket.send_string(command)
         response = socket.recv_string()
         if not response.startswith("0 "):
-            raise RuntimeError(f"Failed to send zmq command. {response}")
+            raise PlaybackOptionsError(f"ffmpeg rejected `{command}`: {response}")
 
     def set_options(self, options: PlaybackOptions) -> None:
         with zmq.Context() as context:
             socket = context.socket(zmq.REQ)
-            with socket.connect(f"ipc://{self._temporary_file.name}"):
-                if options.nightcore_factor is not None:
-                    self.__send_string(
-                        socket, f"rubberband@1 tempo {options.nightcore_factor}"
-                    )
-                    self.__send_string(
-                        socket, f"rubberband@1 pitch {options.nightcore_factor}"
-                    )
-                if options.bassboost_factor is not None:
-                    self.__send_string(socket, f"bass@1 g {options.bassboost_factor}")
-                if options.volume is not None:
-                    self.__send_string(socket, f"volume@1 volume {options.volume}")
+            socket.setsockopt(zmq.LINGER, 0)
+            socket.setsockopt(zmq.SNDTIMEO, ZMQ_TIMEOUT_MS)
+            socket.setsockopt(zmq.RCVTIMEO, ZMQ_TIMEOUT_MS)
+            try:
+                with socket.connect(f"ipc://{self._temporary_file.name}"):
+                    if options.nightcore_factor is not None:
+                        self.__send_string(
+                            socket, f"rubberband@1 tempo {options.nightcore_factor}"
+                        )
+                        self.__send_string(
+                            socket, f"rubberband@1 pitch {options.nightcore_factor}"
+                        )
+                    if options.bassboost_factor is not None:
+                        self.__send_string(
+                            socket, f"bass@1 g {options.bassboost_factor}"
+                        )
+                    if options.volume is not None:
+                        self.__send_string(socket, f"volume@1 volume {options.volume}")
+            except zmq.Again as e:
+                raise PlaybackOptionsError("ffmpeg did not respond.") from e
+            finally:
+                socket.close()
 
 
 @dataclasses.dataclass
@@ -327,15 +342,17 @@ class YTDLQueuedStreamAudio:
 
     def set_options(
         self, options: PlaybackOptions, update: Callable[[AudioTrack], None]
-    ) -> None:
+    ) -> bool:
         with self.lock:
             if not self.queue:
-                return
-            queue = self.queue[0]
-            if not queue.source:
-                return
-            self.executor.submit(queue.source.set_options, options)
-            update(queue.track)
+                return False
+            entry = self.queue[0]
+            source = entry.source
+            if source is None:
+                return False
+        source.set_options(options)
+        update(entry.track)
+        return True
 
     def current_position(self, track_id: int) -> int | None:
         with self.lock:
