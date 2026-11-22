@@ -196,7 +196,11 @@ class LazyAudioSource:
 
     def read(self, count: int) -> bytes:
         with self.lock:
-            self._prefetch()
+            try:
+                self._prefetch()
+            except Exception as e:  # noqa: BLE001
+                print(f"[!] failed to start {self.track.url} {e}")
+                return b""
             source = self.source
         if source is None:
             return b""
@@ -212,9 +216,17 @@ async def _invoke(callbacks: Sequence[Callable[[], None] | Awaitable[None]]):
 
     def f():
         for i in sync_funcs:
-            i()  # type: ignore
+            try:
+                i()  # type: ignore
+            except Exception as e:  # noqa: BLE001
+                print(f"[!] queue callback failed {e}")
 
-    await asyncio.gather(asyncio.to_thread(f), *async_funcs)
+    results = await asyncio.gather(
+        asyncio.to_thread(f), *async_funcs, return_exceptions=True
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            print(f"[!] queue callback failed {result}")
 
 
 @dataclasses.dataclass
@@ -467,7 +479,11 @@ class BufferedAudioSource:
                     self.chunk_sem.release(chunks_pending + 1)
                     break
 
-            chunk = self.source.read(self.chunk_size)
+            try:
+                chunk = self.source.read(self.chunk_size)
+            except Exception as e:  # noqa: BLE001
+                print(f"[!] BufferedAudioSource fetcher failed {e}")
+                chunk = AudioChunk(data=b"", playback_id=-1)
             if len(chunk.data) == 0:
                 self.chunk_sem.release(chunks_pending + 1)
                 self.done = True

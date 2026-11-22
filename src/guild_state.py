@@ -41,11 +41,11 @@ class GuildState:
             print(f"[ ] enqueued {track.title}")
             if track.on_enqueue:
                 await track.on_enqueue()
+            track.on_enqueue_time = int(time.time() * 1000)
             if track.can_edit_message:
                 await interaction.edit_original_response(
                     view=self.new_playback_control_view(interaction, track)
                 )
-            track.on_enqueue_time = int(time.time() * 1000)
 
     async def _on_dequeued(self, track: AudioTrack) -> None:
         interaction = cast(discord.Interaction, track.user_data)
