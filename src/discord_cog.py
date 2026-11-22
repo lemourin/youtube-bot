@@ -237,8 +237,13 @@ class DiscordCog(discord.ext.commands.Cog):
         track_id = self.next_track_id
         self.next_track_id += 1
         state = self.__guild_state(interaction.guild_id)
-        voice_client = await state.voice_client(interaction)
+        await state.check_voice(interaction)
         await interaction.response.defer()
+        try:
+            voice_client = await state.voice_client(interaction)
+        except Exception:
+            await interaction.followup.send("Failed to join the voice channel.")
+            raise
 
         async def message_content_with_yt_dlp() -> MessageContent | None:
             details = await asyncio.to_thread(yt_video_data_from_url, url)
@@ -887,10 +892,16 @@ class DiscordCog(discord.ext.commands.Cog):
         assert author.voice is not None
         assert interaction.guild_id
         state = self.__guild_state(interaction.guild_id)
-        await (await state.voice_client(interaction)).move_to(author.voice.channel)
-        await interaction.response.send_message(
-            "Joined.", ephemeral=True, delete_after=5
-        )
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            voice_client = await state.voice_client(interaction)
+            await voice_client.move_to(author.voice.channel)
+        except Exception:
+            await interaction.followup.send(
+                "Failed to join the voice channel.", ephemeral=True
+            )
+            raise
+        await interaction.followup.send("Joined.", ephemeral=True)
 
     async def skip(self, interaction: discord.Interaction) -> None:
         print("[ ] skip")

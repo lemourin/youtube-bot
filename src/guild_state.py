@@ -183,12 +183,9 @@ class GuildState:
                 return voice_client
         return None
 
-    async def voice_client(
-        self, interaction: discord.Interaction
-    ) -> discord.VoiceClient:
-        voice_client = self.current_voice_client()
-        if voice_client:
-            return voice_client
+    async def check_voice(self, interaction: discord.Interaction) -> None:
+        if self.current_voice_client():
+            return
         assert isinstance(interaction.user, discord.Member)
         if interaction.user.voice is None or interaction.user.voice.channel is None:
             await interaction.response.send_message(
@@ -197,6 +194,17 @@ class GuildState:
                 delete_after=5,
             )
             raise discord.ext.commands.CommandError("not connected to a voice channel")
+
+    async def voice_client(
+        self, interaction: discord.Interaction
+    ) -> discord.VoiceClient:
+        voice_client = self.current_voice_client()
+        if voice_client:
+            return voice_client
+        await self.check_voice(interaction)
+        assert isinstance(interaction.user, discord.Member)
+        assert interaction.user.voice is not None
+        assert interaction.user.voice.channel is not None
         return await interaction.user.voice.channel.connect()
 
     def __create_playback_control_view(
