@@ -57,9 +57,9 @@ def _create_yt_dlp_process(
 
 class YTDLStreamAudio:
     def __init__(self, url: str, options: PlaybackOptions) -> None:
-        if not options.nightcore_factor:
+        if options.nightcore_factor is None:
             options.nightcore_factor = 1.0
-        if not options.bassboost_factor:
+        if options.bassboost_factor is None:
             options.bassboost_factor = 0.0
         if options.volume is None:
             options.volume = 1.0

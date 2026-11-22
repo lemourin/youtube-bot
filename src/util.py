@@ -42,6 +42,12 @@ class PlaybackOptions:
     stop_timestamp: str | None = None
     volume: float | None = None
 
+    def __post_init__(self) -> None:
+        if self.nightcore_factor is not None:
+            self.nightcore_factor = min(max(self.nightcore_factor, 0.5), 1.5)
+        if self.bassboost_factor is not None:
+            self.bassboost_factor = min(max(self.bassboost_factor, -10.0), 10.0)
+
 
 def trim_option_text(text: str):
     if len(text) <= 100:
