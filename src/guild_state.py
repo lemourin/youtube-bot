@@ -133,11 +133,8 @@ class GuildState:
             return self._queue.current_position(track_id) is not None
 
     async def _skip(self, track_id: int | None = None) -> None:
-        if self._source is not None and (
-            track_id is None or self._queue.current_track_id() == track_id
-        ):
-            self._source.drain()
-        await self._queue.skip(track_id)
+        on_drain = self._source.drain if self._source is not None else None
+        await self._queue.skip(track_id, on_drain)
 
     async def play_now(
         self,
@@ -145,9 +142,8 @@ class GuildState:
         track: AudioTrack,
     ) -> None:
         async with self._queue_lock:
-            if self._source is not None:
-                self._source.drain()
-            await self._queue.play_now(track)
+            on_drain = self._source.drain if self._source is not None else None
+            await self._queue.play_now(track, on_drain)
             await self._start(voice_client)
 
     async def current_track_id(self) -> int | None:

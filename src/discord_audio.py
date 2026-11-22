@@ -52,8 +52,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         )
         super().__init__(AudioSource(self.source), volume)
 
-    def drain(self) -> None:
-        self.source.drain()
+    def drain(self, playback_id: int) -> None:
+        self.source.drain(playback_id)
 
     def is_done(self) -> bool:
         return self.source.is_done()

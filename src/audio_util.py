@@ -263,7 +263,11 @@ class YTDLQueuedStreamAudio:
             callbacks += self.__prefetch()
         await _invoke(callbacks)
 
-    async def skip(self, track_id: int | None = None) -> None:
+    async def skip(
+        self,
+        track_id: int | None = None,
+        on_drain: Callable[[int], None] | None = None,
+    ) -> None:
         callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
             if not self.queue:
@@ -278,6 +282,8 @@ class YTDLQueuedStreamAudio:
             if d is None:
                 return
 
+            if d == 0 and on_drain is not None:
+                on_drain(self.__drain_id(self.queue[0]))
             self.queue[d].remove()
             callbacks.append(self.queue[d].cleanup)
             callbacks.append(self.on_dequeued(self.queue[d].track))
@@ -292,6 +298,7 @@ class YTDLQueuedStreamAudio:
     async def play_now(
         self,
         track: AudioTrack,
+        on_drain: Callable[[int], None] | None = None,
     ) -> None:
         callbacks: MutableSequence[Callable[[], None] | Awaitable[None]] = []
         with self.lock:
@@ -300,6 +307,8 @@ class YTDLQueuedStreamAudio:
                 return
 
             if self.queue:
+                if on_drain is not None:
+                    on_drain(self.__drain_id(self.queue[0]))
                 self.queue[0].remove()
                 callbacks.append(self.on_dequeued(self.queue[0].track))
                 callbacks.append(self.queue[0].cleanup)
@@ -396,6 +405,11 @@ class YTDLQueuedStreamAudio:
                 return i
         return None
 
+    def __drain_id(self, entry: LazyAudioSource) -> int:
+        if entry.playback_id is not None:
+            return entry.playback_id
+        return self.current_playback_id
+
     def __prefetch(self) -> list[Callable[[], None]]:
         callbacks = []
         if len(self.queue) >= 1:
@@ -422,14 +436,13 @@ class BufferedAudioSource:
         self.chunk_sem = threading.Semaphore(value=0)
         self.cv = threading.Condition(self.access_sem)
         self.future = self.executor.submit(self.__fetcher_task)
-        self.current_playback_id = -1
         self.min_playback_id = -1
         with self.chunk_sem:
             pass
 
-    def drain(self) -> None:
+    def drain(self, playback_id: int) -> None:
         with self.access_sem:
-            self.min_playback_id = self.current_playback_id + 1
+            self.min_playback_id = max(self.min_playback_id, playback_id + 1)
 
     def is_done(self) -> bool:
         with self.access_sem:
@@ -448,7 +461,6 @@ class BufferedAudioSource:
             return b""
 
         c = self.chunks[0]
-        self.current_playback_id = c.playback_id
         self.chunks = self.chunks[1:]
         if len(self.chunks) == self.max_chunk_count - 1:
             self.cv.notify()
