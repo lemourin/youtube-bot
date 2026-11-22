@@ -100,6 +100,9 @@ class YTDLStreamAudio:
             self._read_proc.wait()
             self._temporary_file.close()
             raise
+        finally:
+            if self._read_proc.stdout is not None:
+                self._read_proc.stdout.close()
 
     def read(self, count: int) -> bytes:
         assert self._proc.stdout is not None
