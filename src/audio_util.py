@@ -56,7 +56,7 @@ class YTDLStreamAudio:
             options.nightcore_factor = 1.0
         if not options.bassboost_factor:
             options.bassboost_factor = 0.0
-        if not options.volume:
+        if options.volume is None:
             options.volume = 1.0
 
         self._temporary_file = tempfile.NamedTemporaryFile()  # noqa: SIM115

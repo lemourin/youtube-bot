@@ -356,7 +356,7 @@ class DiscordCog(discord.ext.commands.Cog):
             filter_graph=filter_graph,
             start_timestamp=start_timestamp,
             stop_timestamp=stop_timestamp,
-            volume=min(max(volume, 0), 200) / 100 if volume else None,
+            volume=min(max(volume, 0), 200) / 100 if volume is not None else None,
         )
         if validators.url(query):
             return await self.__url(interaction, url=query, options=options)
@@ -517,7 +517,7 @@ class DiscordCog(discord.ext.commands.Cog):
                 filter_graph=filter_graph,
                 start_timestamp=start_timestamp,
                 stop_timestamp=stop_timestamp,
-                volume=min(max(volume, 0), 200) / 100 if volume else None,
+                volume=min(max(volume, 0), 200) / 100 if volume is not None else None,
             ),
         )
 
@@ -623,7 +623,11 @@ class DiscordCog(discord.ext.commands.Cog):
                         filter_graph=filter_graph,
                         start_timestamp=start_timestamp,
                         stop_timestamp=stop_timestamp,
-                        volume=min(max(volume, 0), 200) / 100 if volume else None,
+                        volume=(
+                            min(max(volume, 0), 200) / 100
+                            if volume is not None
+                            else None
+                        ),
                     ),
                     filesize_limit=filesize_limit,
                     storage_options=self.file_storage_options,
@@ -927,7 +931,9 @@ class DiscordCog(discord.ext.commands.Cog):
     ):
         print("[ ] set")
         await self.__ensure_playing(interaction)
-        effective_volume = min(max(volume, 0), 200) / 100 if volume else None
+        effective_volume = (
+            min(max(volume, 0), 200) / 100 if volume is not None else None
+        )
         options = PlaybackOptions(
             nightcore_factor=nightcore_factor,
             bassboost_factor=bassboost_factor,
@@ -960,7 +966,7 @@ class DiscordCog(discord.ext.commands.Cog):
     ) -> None:
         await self.set(
             interaction,
-            nightcore_factor=factor or 1.1,
+            nightcore_factor=factor if factor is not None else 1.1,
             bassboost_factor=None,
             volume=None,
         )
@@ -972,7 +978,7 @@ class DiscordCog(discord.ext.commands.Cog):
         await self.set(
             interaction,
             nightcore_factor=None,
-            bassboost_factor=factor or 10.0,
+            bassboost_factor=factor if factor is not None else 10.0,
             volume=None,
         )
 
