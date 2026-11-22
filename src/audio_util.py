@@ -59,9 +59,14 @@ class YTDLStreamAudio:
         if not options.volume:
             options.volume = 1.0
 
+        self._temporary_file = tempfile.NamedTemporaryFile()  # noqa: SIM115
         try:
-            self._temporary_file = tempfile.NamedTemporaryFile()  # noqa: SIM115
             self._read_proc = _create_yt_dlp_process(url, options)
+        except Exception:
+            self._temporary_file.close()
+            raise
+
+        try:
             self._proc = subprocess.Popen(
                 args=[
                     "ffmpeg",
@@ -86,8 +91,9 @@ class YTDLStreamAudio:
                 stdout=subprocess.PIPE,
             )
         except Exception:
-            if self._temporary_file:
-                self._temporary_file.close()
+            self._read_proc.terminate()
+            self._read_proc.wait()
+            self._temporary_file.close()
             raise
 
     def read(self, count: int) -> bytes:

@@ -55,7 +55,7 @@ class GuildState:
                 current_time = int(time.time() * 1000)
                 duration = current_time - track.on_enqueue_time
                 if duration < min_enqueue_time:
-                    await asyncio.sleep((min_enqueue_time - duration) // 1000)
+                    await asyncio.sleep((min_enqueue_time - duration) / 1000)
             print(f"[ ] dequeued {track.title}")
             if track.on_dequeue:
                 await track.on_dequeue()
