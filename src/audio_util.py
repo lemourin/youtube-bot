@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 import tempfile
 import threading
-from collections.abc import Awaitable, Callable, MutableSequence, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, MutableSequence, Sequence
 from concurrent.futures import Executor
 from typing import Any
 
@@ -197,8 +197,8 @@ class YTDLQueuedStreamAudio:
     def __init__(
         self,
         executor: Executor,
-        on_enqueued: Callable[[AudioTrack], Awaitable[None]],
-        on_dequeued: Callable[[AudioTrack], Awaitable[None]],
+        on_enqueued: Callable[[AudioTrack], Coroutine[Any, Any, None]],
+        on_dequeued: Callable[[AudioTrack], Coroutine[Any, Any, None]],
     ) -> None:
         super().__init__()
         self.main_loop = asyncio.get_event_loop()
