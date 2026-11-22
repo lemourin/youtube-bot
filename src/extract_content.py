@@ -690,7 +690,7 @@ def extract_content(
         input_codec_v = info.input_codec_v
         input_filename_v = info.input_filename_v
         input_filename_a = info.input_filename_a
-        duration_seconds = info.duration_seconds
+        duration_seconds = max(info.duration_seconds, 1)
 
         bitrate_a = storage_options.attachment.audio_bitrate
         bitrate_v = min(

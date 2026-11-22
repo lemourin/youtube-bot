@@ -643,10 +643,11 @@ class DiscordCog(discord.ext.commands.Cog):
                     await interaction.followup.send(content=attachment.url)
                 else:
                     await interaction.followup.send("Failed to extract a video.")
-        except discord.errors.DiscordException as e:
-            await interaction.followup.send(e.args[0])
-        except ExtractContentException as e:
-            await interaction.followup.send(e.args[0])
+        except (discord.errors.DiscordException, ExtractContentException) as e:
+            await interaction.followup.send(str(e) or "Failed to extract a video.")
+        except Exception:
+            await interaction.followup.send("Failed to extract a video.")
+            raise
 
     async def __authorize_options(
         self, interaction: discord.Interaction, filter_graph: str | None
