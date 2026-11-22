@@ -171,13 +171,17 @@ class LazyAudioSource:
         self.source: YTDLStreamAudio | None = None
         self.lock = threading.Lock()
         self.playback_id: int | None = None
+        self.removed = False
+
+    def remove(self) -> None:
+        self.removed = True
 
     def prefetch(self) -> None:
         with self.lock:
             self._prefetch()
 
     def _prefetch(self) -> None:
-        if self.source is None:
+        if self.source is None and not self.removed:
             self.source = YTDLStreamAudio(self.track.url, self.track.playback_options)
 
     def cleanup(self) -> None:
@@ -190,11 +194,13 @@ class LazyAudioSource:
     def read(self, count: int) -> bytes:
         with self.lock:
             self._prefetch()
-            assert self.source
-            data = self.source.read(count)
-            if len(data) != count:
-                return b""
-            return data
+            source = self.source
+        if source is None:
+            return b""
+        data = source.read(count)
+        if len(data) != count:
+            return b""
+        return data
 
 
 async def _invoke(callbacks: Sequence[Callable[[], None] | Awaitable[None]]):
@@ -257,6 +263,7 @@ class YTDLQueuedStreamAudio:
             if d is None:
                 return
 
+            self.queue[d].remove()
             callbacks.append(self.queue[d].cleanup)
             callbacks.append(self.on_dequeued(self.queue[d].track))
             self.queue.pop(d)
@@ -278,6 +285,7 @@ class YTDLQueuedStreamAudio:
                 return
 
             if self.queue:
+                self.queue[0].remove()
                 callbacks.append(self.on_dequeued(self.queue[0].track))
                 callbacks.append(self.queue[0].cleanup)
                 self.queue.pop(0)
@@ -297,39 +305,48 @@ class YTDLQueuedStreamAudio:
         await _invoke(callbacks)
 
     def read(self, count: int) -> AudioChunk:
-        with self.lock:
-            # print("[ ] YTDLQueuedStreamAudio read")
-            if not self.queue:
-                print("[ ] queue empty")
-                return AudioChunk(data=b"", playback_id=-1)
-            source = self.queue[0]
+        while True:
+            with self.lock:
+                if not self.queue:
+                    print("[ ] queue empty")
+                    return AudioChunk(data=b"", playback_id=-1)
+                source = self.queue[0]
+                if source.playback_id is None:
+                    self.current_playback_id += 1
+                    source.playback_id = self.current_playback_id
+                playback_id = source.playback_id
+
             c = source.read(count)
-            if source.playback_id is None:
-                self.current_playback_id += 1
-                source.playback_id = self.current_playback_id
-            playback_id = source.playback_id
-            # print(f"[ ] YTDLQueuedStreamAudio got {len(c)} bytes from queue head")
-            if len(c) < AUDIO_PACKET_SIZE:
-                print("[ ] advancing queue")
-                if len(self.queue) > 1:
-                    c = c + self.zeros[len(c) :]
-                self.executor.submit(source.cleanup)
-                self.queue = self.queue[1:]
-                asyncio.run_coroutine_threadsafe(
-                    self.on_dequeued(source.track), self.main_loop
-                )
-                if len(self.queue) >= 1:
+            if len(c) == count:
+                return AudioChunk(c, playback_id)
+
+            # Short read. If the source is still the head, the track ended.
+            # Otherwise it was removed (skip/play_now/cleanup) while we read it,
+            # so the short read means it was killed: retry with the new head.
+            with self.lock:
+                if self.queue and self.queue[0] is source:
+                    print("[ ] advancing queue")
+                    if len(self.queue) > 1:
+                        c = c + self.zeros[len(c) :]
+                    source.remove()
+                    self.executor.submit(source.cleanup)
+                    self.queue = self.queue[1:]
                     asyncio.run_coroutine_threadsafe(
-                        self.on_enqueued(self.queue[0].track), self.main_loop
+                        self.on_dequeued(source.track), self.main_loop
                     )
-                if len(self.queue) >= 2:
-                    self.executor.submit(self.queue[1].prefetch)
-        return AudioChunk(c, playback_id)
+                    if len(self.queue) >= 1:
+                        asyncio.run_coroutine_threadsafe(
+                            self.on_enqueued(self.queue[0].track), self.main_loop
+                        )
+                    if len(self.queue) >= 2:
+                        self.executor.submit(self.queue[1].prefetch)
+                    return AudioChunk(c, playback_id)
 
     def cleanup(self) -> None:
         with self.lock:
             print("[ ] YTDLQueuedStreamAudio cleanup")
             for a in self.queue:
+                a.remove()
                 asyncio.ensure_future(self.on_dequeued(a.track))
                 self.executor.submit(a.cleanup)
             self.queue = []

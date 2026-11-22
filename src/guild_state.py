@@ -159,9 +159,9 @@ class GuildState:
 
     async def cleanup(self) -> None:
         async with self._queue_lock:
-            if self._source is not None:
-                self._source.cleanup()
             self._queue.cleanup()
+            if self._source is not None:
+                await asyncio.to_thread(self._source.cleanup)
 
     def set_volume(self, value: float) -> None:
         self._volume = value
